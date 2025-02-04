@@ -1,0 +1,75 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="源文件">
+      <UniqueIdentifier>{4FC737F1-C7A5-4376-A066-2A32D752A2FF}</UniqueIdentifier>
+      <Extensions>cpp;c;cc;cxx;c++;cppm;ixx;def;odl;idl;hpj;bat;asm;asmx</Extensions>
+    </Filter>
+    <Filter Include="头文件">
+      <UniqueIdentifier>{93995380-89BD-4b04-88EB-625FBE52EBFB}</UniqueIdentifier>
+      <Extensions>h;hh;hpp;hxx;h++;hm;inl;inc;ipp;xsd</Extensions>
+    </Filter>
+    <Filter Include="资源文件">
+      <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
+      <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
+    </Filter>
+    <Filter Include="GGML">
+      <UniqueIdentifier>{743d3e35-b0ca-4779-9adb-7fb616b41eab}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="Janus.Cpp.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ggml\include\ggml.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-alloc.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-backend.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-blas.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-cann.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-cpp.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-cpu.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-cuda.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-kompute.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-metal.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-opencl.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-opt.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-rpc.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-sycl.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\ggml-vulkan.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="ggml\include\gguf.h">
+      <Filter>GGML</Filter>
+    </ClInclude>
+  </ItemGroup>
+</Project>
