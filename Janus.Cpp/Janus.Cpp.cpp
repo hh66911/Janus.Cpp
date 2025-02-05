@@ -20,7 +20,9 @@
 #include <ranges>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
 #include <exception>
+#include <type_traits>
 
 void inline print_shape(const ggml_tensor* tensor)
 {
@@ -54,6 +56,40 @@ void print_tensor_2d(const ggml_tensor* tensor)
 	{
 		std::cout << "Unsupported type\n";
 	}
+}
+
+template <typename... DimTypes>
+	requires (std::is_integral_v<DimTypes> && ...)
+ggml_tensor* view_tensor(ggml_context* ctx, ggml_tensor* tensor, DimTypes... dims)
+{
+	constexpr size_t num_dims = sizeof...(DimTypes);
+	static_assert(num_dims <= GGML_MAX_DIMS);
+	auto type = tensor->type;
+	std::array<size_t, num_dims> ne = { dims... };
+	if constexpr (num_dims == 1)
+		return ggml_view_1d(ctx, tensor, ne[0], 0);
+	else if constexpr (num_dims == 2)
+		return ggml_view_2d(ctx, tensor, ne[0], ne[1],
+			ggml_row_size(type, ne[0]), 0);
+	else if constexpr (num_dims == 3)
+		return ggml_view_3d(ctx, tensor, ne[0], ne[1], ne[2],
+			ggml_row_size(type, ne[0]),
+			ggml_row_size(type, ne[0] * ne[1]),
+			0);
+	else if constexpr (num_dims == 4)
+		return ggml_view_4d(ctx, tensor, ne[0], ne[1], ne[2], ne[3],
+			ggml_row_size(type, ne[0]),
+			ggml_row_size(type, ne[0] * ne[1]),
+			ggml_row_size(type, ne[0] * ne[1] * ne[2]),
+			0);
+	else
+		static_assert(false);
+}
+
+ggml_tensor* flatten_tensor(ggml_context* ctx, ggml_tensor* tensor)
+{
+	auto ne = ggml_nelements(tensor);
+	return ggml_view_1d(ctx, tensor, ne, 0);
 }
 
 /*
@@ -90,7 +126,7 @@ public:
 		ggml_backend* backend = nullptr
 	) : has_backend(backend)
 	{
-		ggml_type type = GGML_TYPE_Q8_K;
+		ggml_type type = GGML_TYPE_Q8_0;
 		if (has_backend)
 		{
 			ggml_init_params layer_param = {
@@ -102,9 +138,11 @@ public:
 		}
 		else
 		{
+			constexpr size_t num_elements = 4096ull * 4096 * 4 + 4096ull * 11008 * 3;
 			ggml_init_params layer_param = {
-				.mem_size = ggml_tensor_overhead() * 7 +
-					(4096ull * 4096 * 4 + 4096ull * 11008 * 3) * ggml_type_size(type), // ~400 MB
+				// ~400 MB when type = BF16
+				.mem_size = num_elements * ggml_type_size(type) / ggml_blck_size(type)
+						  + 7 * ggml_tensor_overhead(),
 			};
 			layer_ctx = ggml_init(layer_param);
 		}
@@ -124,13 +162,13 @@ public:
 		ggml_set_name(down_proj, "down_proj");
 		if (has_backend)
 			ggml_backend_alloc_ctx_tensors(layer_ctx, backend);
-		if (quant)
+		else
 		{
+			// 从文件加载权重并量化
+			return;
 			std::vector<float> original(ggml_nelements(q_proj));
-			std::vector<uint8_t> quantized(ggml_nbytes(q_proj));
-			ggml_quantize_chunk(type, original.data(), quantized.data(),
+			ggml_quantize_chunk(type, original.data(), q_proj->data,
 				0, q_proj->ne[1], q_proj->ne[0], nullptr);
-			ggml_backend_tensor_set(q_proj, quantized.data(), 0, ggml_nbytes(q_proj));
 		}
 	}
 
@@ -175,53 +213,67 @@ public:
 		ggml_tensor* output = nullptr;
 		{
 			// 层归一化
-			input_emb = ggml_rms_norm(ctx, input_emb, LlamaDecoderLayer::eps);
+			input_emb = ggml_rms_norm_inplace(ctx, input_emb, eps);
 
 			auto q = ggml_mul_mat(ctx, q_proj, input_emb);
 			auto k = ggml_mul_mat(ctx, k_proj, input_emb);
 			auto v = ggml_mul_mat(ctx, v_proj, input_emb);
 
 			// 调整形状到 [batch, seq_len, num_head, head_dim]
-			q = ggml_reshape_4d(ctx, q,
-				LlamaDecoderLayer::head_dim, LlamaDecoderLayer::num_heads, input_len, batch_size);
-			k = ggml_reshape_4d(ctx, k,
-				LlamaDecoderLayer::head_dim, LlamaDecoderLayer::num_heads, input_len, batch_size);
-			v = ggml_reshape_4d(ctx, v,
-				LlamaDecoderLayer::head_dim, LlamaDecoderLayer::num_heads, input_len, batch_size);
+			q = view_tensor(ctx, q,
+				head_dim, num_heads, input_len, batch_size);
+			k = view_tensor(ctx, k,
+				head_dim, num_heads, input_len, batch_size);
+			v = view_tensor(ctx, v,
+				head_dim, num_heads, input_len, batch_size);
 
-			q = ggml_rope_inplace(ctx, q, pos_ids, LlamaDecoderLayer::head_dim, 0);
-			k = ggml_rope_inplace(ctx, k, pos_ids, LlamaDecoderLayer::head_dim, 0);
-			v = ggml_rope_inplace(ctx, v, pos_ids, LlamaDecoderLayer::head_dim, 0);
+			q = ggml_rope_inplace(ctx, q, pos_ids, head_dim, 0);
+			k = ggml_rope_inplace(ctx, k, pos_ids, head_dim, 0);
+			v = ggml_rope_inplace(ctx, v, pos_ids, head_dim, 0);
 			if (!has_backend)
 			{
 				q = ggml_cast(ctx, q, GGML_TYPE_BF16);
 				k = ggml_cast(ctx, k, GGML_TYPE_BF16);
 				v = ggml_cast(ctx, v, GGML_TYPE_BF16);
 			}
+			else
+			{
+				/* Shape: [batch, num_head * head_dim, 1, seq_len]
+				k = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, k, 2, 0, 1, 3)),
+					input_len * LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads,
+					batch_size);
+				q = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, q, 2, 0, 1, 3)),
+					input_len * LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, batch_size);
+				v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 2, 0, 1, 3)),
+					input_len * LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, batch_size);
+				q = ggml_cast(ctx, q, GGML_TYPE_F16);
+				k = ggml_cast(ctx, k, GGML_TYPE_F16);
+				v = ggml_cast(ctx, v, GGML_TYPE_F16);
+				*/
+				k = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)),
+					head_dim, input_len, num_heads, batch_size);
+				q = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3)),
+					head_dim, input_len, num_heads, batch_size);
+				v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3)),
+					input_len, head_dim, num_heads, batch_size);
+			}
 
 			ggml_tensor* attn_output = nullptr;
 			if (has_backend)
 			{
-				// Shape: [batch, num_head * head_dim, 1, seq_len]
-				k = ggml_reshape_4d(ctx, ggml_cont(ctx, ggml_permute(ctx, k, 2, 0, 1, 3)),
-					1, input_len, LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, batch_size);
-				q = ggml_reshape_4d(ctx, ggml_cont(ctx, ggml_permute(ctx, q, 2, 0, 1, 3)),
-					1, input_len, LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, batch_size);
-				v = ggml_reshape_4d(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 2, 0, 1, 3)),
-					input_len, 1, LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, batch_size);
 				// K * Q Shape: [batch, num_head * head_dim, seq_len, seq_len]
-				struct ggml_tensor* KQ = ggml_mul_mat(ctx, k, q);
+				ggml_tensor* KQ = ggml_mul_mat(ctx, k, q); // 800ms !!!!!!!!!!!!!!!!
 				// KQ_scaled = KQ / sqrt(n_embd/n_head)
-				struct ggml_tensor* KQ_scaled = ggml_scale_inplace(ctx, KQ,
-					1.0f / sqrt(float(LlamaDecoderLayer::head_dim) / LlamaDecoderLayer::num_heads));
+				ggml_tensor* KQ_scaled = ggml_scale_inplace(ctx, KQ,
+					1.0f / sqrt(float(head_dim) / num_heads));
 				// KQ_masked = mask_past(KQ_scaled)
-				// struct ggml_tensor* KQ_masked = ggml_diag_mask_inf_inplace(ctx, KQ_scaled, n_past);
+				// ggml_tensor* KQ_masked = ggml_diag_mask_inf_inplace(ctx, KQ_scaled, n_past);
 				// KQ = soft_max(KQ_masked)
-				struct ggml_tensor* KQ_soft_max = ggml_soft_max_inplace(ctx, KQ);
-				// KQV = transpose(V) * KQ_soft_max
-				attn_output = ggml_permute(ctx, ggml_mul_mat(ctx, KQ_soft_max, v), 2, 0, 3, 1);
-				attn_output = ggml_reshape_3d(ctx, ggml_cont(ctx, attn_output),
-					LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, input_len, batch_size);
+				ggml_tensor* KQ_soft_max = ggml_soft_max_inplace(ctx, KQ);
+				// KQV = transpose(V) * KQ_soft_max 800ms !!!!!!!!!!!!!!!!
+				attn_output = ggml_permute(ctx, ggml_mul_mat(ctx, KQ_soft_max, v), 2, 0, 3, 1); 
+				attn_output = view_tensor(ctx, ggml_cont(ctx, attn_output),
+					head_dim * num_heads, input_len, batch_size);
 			}
 			else
 			{
@@ -229,14 +281,14 @@ public:
 				auto attn_output = ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.0f, 0.0f, 0.0f);
 				// 调整注意力输出形状到 [batch, seq_len, num_head * head_dim]
 				attn_output = ggml_permute(ctx, attn_output, 0, 2, 1, 3);
-				attn_output = ggml_reshape_3d(ctx, ggml_cont(ctx, attn_output),
-					LlamaDecoderLayer::head_dim * LlamaDecoderLayer::num_heads, input_len, batch_size);
+				attn_output = view_tensor(ctx, ggml_cont(ctx, attn_output),
+					head_dim * num_heads, input_len, batch_size);
 			}
 
 			attn_output = ggml_mul_mat(ctx, o_proj, attn_output);
 
 			// 层归一化
-			auto mlp_input = ggml_rms_norm(ctx, attn_output, LlamaDecoderLayer::eps);
+			auto mlp_input = ggml_rms_norm(ctx, attn_output, eps);
 
 			// MLP 层
 			auto gate = ggml_mul_mat(ctx, gate_proj, mlp_input);
@@ -248,7 +300,7 @@ public:
 			// 通过 down_proj 层
 			auto down = ggml_mul_mat(ctx, down_proj, gate_up);
 
-			output = ggml_add_inplace(ctx, down, attn_output);
+			output = ggml_add_inplace(ctx, flatten_tensor(ctx, down), flatten_tensor(ctx, attn_output));
 		}
 		ggml_build_forward_expand(layer_graph, output);
 		ggml_free(ctx);
@@ -277,6 +329,9 @@ public:
 		if (!ggml_gallocr_alloc_graph(layer_galloc, gr))
 			throw std::runtime_error("Cannot allocate graph in LlamaDecoderLayer");
 
+		std::cout << "Copying tensors to backend" << std::endl;
+		auto start_tiem = std::chrono::high_resolution_clock::now();
+
 		auto input_embs_tensor = ggml_graph_get_tensor(gr, "input_emb");
 		ggml_backend_tensor_set(input_embs_tensor, input_embs_data.data(), 0, input_embs_data.size());
 
@@ -285,6 +340,10 @@ public:
 		std::vector<int> pos_ids_data(input_len);
 		std::copy(pos_ids_generator.begin(), pos_ids_generator.end(), pos_ids_data.begin());
 		ggml_backend_tensor_set(pos_ids, pos_ids_data.data(), 0, ggml_nbytes(pos_ids));
+
+		auto end_time = std::chrono::high_resolution_clock::now();
+		auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_tiem);
+		std::cout << "Copy time: " << dur << std::endl;
 
 		ggml_backend_graph_compute(has_backend, gr);
 		auto output = ggml_graph_node(gr, -1);
@@ -340,12 +399,12 @@ public:
 
 		layers.reserve(30);
 		for (auto i : std::views::iota(0ull, 30ull))
-			layers.emplace_back(type);
+			layers.emplace_back();
 
 		offloads.reserve(gpu_offload_num);
 		for (auto i : std::views::iota(0ull, gpu_offload_num))
 		{
-			offloads.emplace_back(type, cuda_backend);
+			offloads.emplace_back(cuda_backend);
 			layers[i].FillTo(offloads[i]);
 		}
 	}
@@ -413,9 +472,19 @@ public:
 
 		for (auto i : std::views::iota(0ull, gpu_offload_num))
 		{
+			std::cout << "Layer " << std::setw(2) << i << "...";
+
+			auto time_start = std::chrono::high_resolution_clock::now();
+			// 运行模型
 			auto& layer = offloads[i];
 			input_embs_data = layer.run_layer(
 				input_embs_data, cuda_ga, parallel_size * 2, input_len);
+			auto time_end = std::chrono::high_resolution_clock::now();
+			auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(time_end - time_start);
+
+			std::cout << "Done " << "Time: " << dur << std::endl;
+			for (auto i : std::views::iota(0, 30)) std::cout << "-";
+			std::endl(std::cout);
 		}
 
 		return input_embs_data;
@@ -481,7 +550,6 @@ ggml_tensor* generate(
 	for (auto i : std::views::iota(0, 30))
 	{
 		std::cout << "Layer " << std::setw(2) << i << "...";
-
 		std::cout << std::setw(10) << "Done" << std::endl;
 	}
 
@@ -512,60 +580,32 @@ ggml_tensor* generate(
 // 测试代码
 void test()
 {
-	auto ctx_buffer = new uint8_t[8ull * 1024 * 1024 * 2];
-	ggml_context* ctx1 = ggml_init(ggml_init_params{
+	ggml_context* ctx = ggml_init(ggml_init_params{
 		.mem_size = 8ull * 1024 * 1024,
-		.mem_buffer = ctx_buffer,
 		.no_alloc = true
 		});
-	ggml_context* ctx2 = ggml_init(ggml_init_params{
-		.mem_size = 8ull * 1024 * 1024,
-		.mem_buffer = ctx_buffer + 8ull * 1024 * 1024,
-		.no_alloc = true
-		});
-	auto backend = ggml_backend_blas_init();
+	auto backend = ggml_backend_cuda_init(0);
 	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
 
-	size_t mat_shape = 2048;
-	std::vector<ggml_tensor*> tensors;
-	for (auto i : std::views::iota(0, 2))
-		tensors.push_back(ggml_new_tensor_2d(ctx1, GGML_TYPE_F32, mat_shape, mat_shape));
-	for (auto i : std::views::iota(0, 2))
-		tensors.push_back(ggml_new_tensor_2d(ctx2, GGML_TYPE_F32, mat_shape, mat_shape));
-	ggml_backend_alloc_ctx_tensors(ctx1, backend);
-	ggml_backend_alloc_ctx_tensors(ctx2, backend);
+	auto a = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 16, 16, 512, 32);
+	auto b = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 16, 1, 512, 32);
+	ggml_backend_alloc_ctx_tensors(ctx, backend);
 
-	size_t szmat = mat_shape * mat_shape;
-	std::vector<float> mat(szmat);
-	for (auto i : std::views::iota(0, 4))
-	{
-#pragma omp parallel for
-		for (int j = 0; j < szmat; j++) {
-			mat[j] = rand() / 1.f / RAND_MAX;
-		}
-		ggml_backend_tensor_set(tensors[i], mat.data(), 0, szmat);
-	}
+	auto c = ggml_mul_mat(ctx, b, a);
+	auto gr = ggml_new_graph(ctx);
+	ggml_build_forward_expand(gr, c);
 
-	auto c = ggml_mul_mat(ctx1, tensors[0], tensors[1]);
-	auto d = ggml_mul_mat(ctx2, tensors[2], tensors[3]);
-	auto gr1 = ggml_new_graph(ctx1);
-	auto gr2 = ggml_new_graph(ctx2);
-	ggml_build_forward_expand(gr1, c);
-	ggml_build_forward_expand(gr2, d);
-	ggml_free(ctx2);
-	ggml_free(ctx1);
+	ggml_gallocr_reserve(ga, gr);
+	ggml_gallocr_alloc_graph(ga, gr);
 
-	ggml_gallocr_reserve(ga, gr1);
-	ggml_gallocr_alloc_graph(ga, gr1);
-	ggml_backend_graph_compute(backend, gr1);
-	ggml_backend_tensor_get(c, mat.data(), 0, szmat);
-
-	ggml_gallocr_reserve(ga, gr2);
-	ggml_gallocr_alloc_graph(ga, gr2);
-	ggml_backend_graph_compute(backend, gr2);
-	ggml_backend_tensor_get(d, mat.data(), 0, szmat);
+	auto start_time = std::chrono::high_resolution_clock::now();
+	ggml_backend_graph_compute(backend, gr);
+	auto end_time = std::chrono::high_resolution_clock::now();
+	auto dur = std::chrono::duration_cast<std::chrono::milliseconds>(end_time - start_time);
+	std::cout << "Time: " << dur << std::endl;
 
 	ggml_gallocr_free(ga);
+	ggml_free(ctx);
 }
 
 int main(int argc, char** argv)
