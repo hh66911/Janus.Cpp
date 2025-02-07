@@ -21,6 +21,9 @@
     <ClCompile Include="Janus.Cpp.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="quant.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml.h">
@@ -70,6 +73,9 @@
     </ClInclude>
     <ClInclude Include="ggml\include\gguf.h">
       <Filter>GGML</Filter>
+    </ClInclude>
+    <ClInclude Include="quant.h">
+      <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

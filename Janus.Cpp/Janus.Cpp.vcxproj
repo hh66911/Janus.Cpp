@@ -138,6 +138,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Janus.Cpp.cpp" />
+    <ClCompile Include="quant.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml-alloc.h" />
@@ -156,6 +157,7 @@
     <ClInclude Include="ggml\include\ggml-vulkan.h" />
     <ClInclude Include="ggml\include\ggml.h" />
     <ClInclude Include="ggml\include\gguf.h" />
+    <ClInclude Include="quant.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
