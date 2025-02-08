@@ -28,7 +28,11 @@
 #include <type_traits>
 #include <coroutine>
 
+#ifndef _DEBUG
+constexpr int num_threads = 16;
+#else
 constexpr int num_threads = 1;
+#endif
 
 void inline print_shape(const ggml_tensor* tensor)
 {
@@ -190,22 +194,16 @@ public:
 	constexpr static size_t num_heads = 32;
 	constexpr static size_t head_dim = 128;
 	constexpr static size_t num_key_value_heads = 32;
+	const int layer_idx = -1;
 private:
 	std::vector<uint8_t> graph_buffer;
 	ggml_context* layer_ctx = nullptr;
 	ggml_backend* backend;
 
+	std::vector<std::string> mid_tensor_names;
 	std::vector<ggml_tensor*> get_mid_tensors(ggml_cgraph* gr)
 	{
 		std::vector<ggml_tensor*> mid_tensors;
-		std::vector<std::string> mid_tensor_names = {
-			"rms_normed_input",
-			"q", "k", "v",
-			"q_pos", "k_pos", "v_pos",
-			"attn_out+input",
-			"mlp_input",
-			"residual_output"
-		};
 		for (const auto& name : mid_tensor_names)
 		{
 			auto tensor = ggml_graph_get_tensor(gr, name.c_str());
@@ -214,11 +212,23 @@ private:
 		}
 		return mid_tensors;
 	}
+	// 会注册中间张量
+	void register_inspect_tensor(
+		this LlamaDecoderLayer& self,
+		ggml_context* ctx, ggml_cgraph* gr,
+		ggml_tensor* target, const char* name
+	)
+	{
+		target = ggml_cont(ctx, target);
+		ggml_set_name(target, name);
+		ggml_build_forward_expand(gr, target);
+		self.mid_tensor_names.push_back(name);
+	}
 public:
 	LlamaDecoderLayer(
-		int layer_idx = -1,
+		int layer_index = -1,
 		ggml_backend* container = nullptr
-	) : backend(container)
+	) : backend(container), layer_idx(layer_index)
 	{
 		ggml_type type = GGML_TYPE_Q8_0;
 		constexpr size_t num_tensors = 9;
@@ -305,7 +315,10 @@ public:
 
 	ggml_cgraph* build_llama_layer(
 		size_t batch_size,
-		size_t input_len
+		size_t input_len,
+		std::function<
+			void(ggml_context*, ggml_cgraph*, ggml_tensor*, const char*)
+		> inspect_tensor = [](ggml_context*, ggml_cgraph*, ggml_tensor*, const char*) {}
 	)
 	{
 		const size_t reserved_size =
@@ -330,7 +343,7 @@ public:
 			// 层归一化
 			auto rms_normed_input = ggml_rms_norm(ctx, input_emb, eps);
 			rms_normed_input = ggml_mul_inplace(ctx, rms_normed_input, input_norm_weight);
-			ggml_set_name(rms_normed_input, "rms_normed_input");
+			inspect_tensor(ctx, layer_graph, rms_normed_input, "rms_normed_input");
 
 			auto q = ggml_mul_mat(ctx, q_proj, rms_normed_input);
 			auto k = ggml_mul_mat(ctx, k_proj, rms_normed_input);
@@ -343,60 +356,80 @@ public:
 				head_dim, num_heads, input_len, batch_size);
 			v = view_tensor(ctx, v,
 				head_dim, num_heads, input_len, batch_size);
-			ggml_set_name(q, "q");
-			ggml_set_name(k, "k");
-			ggml_set_name(v, "v");
+			inspect_tensor(ctx, layer_graph, q, "q");
+			inspect_tensor(ctx, layer_graph, k, "k");
+			inspect_tensor(ctx, layer_graph, v, "v");
 
-			q = ggml_rope_inplace(ctx, q, pos_ids, head_dim, 0);
-			k = ggml_rope_inplace(ctx, k, pos_ids, head_dim, 0);
-			v = ggml_rope_inplace(ctx, v, pos_ids, head_dim, 0);
+			q = ggml_rope_inplace(ctx, q, pos_ids, head_dim, GGML_ROPE_TYPE_NEOX);
+			k = ggml_rope_inplace(ctx, k, pos_ids, head_dim, GGML_ROPE_TYPE_NEOX);
+			// ggml_permute 与 torch.permute 不一致
+			// ggml_permute 接受的参数为源tensor维度的对应位置
+			// torch.permute 接受的参数为目标tensor维度对应的位置
+			// ggml_permute: dst->ne[permute] = src->ne
+			// torch.permute: dst->ne = src->ne[permute]
 			k = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)),
 				head_dim, input_len, num_heads, batch_size);
 			q = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3)),
 				head_dim, input_len, num_heads, batch_size);
-			v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 1, 3)),
+			v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)),
 				input_len, head_dim, num_heads, batch_size);
-			ggml_set_name(q, "q_pos");
-			ggml_set_name(k, "k_pos");
-			ggml_set_name(v, "v_pos");
+			inspect_tensor(ctx, layer_graph, q, "q_pos_permuted");
+			inspect_tensor(ctx, layer_graph, k, "k_pos_permuted");
+			inspect_tensor(ctx, layer_graph, v, "v_permuted");
 
-			// K * Q Shape: [batch, num_head * head_dim, seq_len, seq_len]
-			ggml_tensor* KQ = ggml_mul_mat(ctx, k, q); // 800ms !!!!!!!!!!!!!!!!
-			// KQ_scaled = KQ / sqrt(n_embd/n_head)
-			ggml_tensor* KQ_scaled = ggml_scale_inplace(ctx, KQ,
-				1.0f / sqrt(float(head_dim) / num_heads));
-			// KQ_masked = mask_past(KQ_scaled)
-			ggml_tensor* KQ_masked = ggml_diag_mask_inf_inplace(ctx, KQ_scaled,
-				static_cast<int>(input_len));
-			// KQ = soft_max(KQ_masked)
-			ggml_tensor* KQ_soft_max = ggml_soft_max_inplace(ctx, KQ_masked);
-			// KQV = transpose(V) * KQ_soft_max 800ms !!!!!!!!!!!!!!!!
-			auto attn_output = ggml_permute(ctx, ggml_mul_mat(ctx, KQ_soft_max, v), 2, 0, 3, 1); 
+			// 用法提示：ggml_mul_mat(ctx, a, b) => b * a^T
+			// 返回的张量形状为 [ne3, ne2, b->ne[1], a->ne[1]]
+			// 特此记录，以免忘记
+			// Shape: [batch, num_head * head_dim, seq_len, seq_len]
+			ggml_tensor* QK = ggml_mul_mat(ctx, k, q); // QK = Q * K^T
+			inspect_tensor(ctx, layer_graph, QK, "QK");
+			// QK_scaled = QK / sqrt(dim)
+			ggml_tensor* QK_scaled = ggml_scale_inplace(ctx, QK,
+				1.0f / float(sqrt(head_dim)));
+			inspect_tensor(ctx, layer_graph, QK_scaled, "QK_scaled");
+			// QK_masked = mask_past(QK_scaled)
+			ggml_tensor* QK_masked = ggml_diag_mask_inf_inplace(ctx, QK_scaled, 0);
+			inspect_tensor(ctx, layer_graph, QK_masked, "QK_masked");
+			// QK = soft_max(QK_masked)
+			ggml_tensor* QK_soft_max = ggml_soft_max_inplace(ctx, QK_masked);
+			inspect_tensor(ctx, layer_graph, QK_soft_max, "QK_soft_max");
+			// attn_output = QK * V^T | Shape: [batch, num_head, seq_len, head_dim]
+			auto attn_output = ggml_mul_mat(ctx, v, QK_soft_max);
+			attn_output = ggml_permute(ctx, attn_output, 0, 2, 1, 3);
+			// Shape: [batch, seq_len, num_head * head_dim]
 			attn_output = view_tensor(ctx, ggml_cont(ctx, attn_output),
 				head_dim * num_heads, input_len, batch_size);
+			inspect_tensor(ctx, layer_graph, attn_output, "attn_output");
 			attn_output = ggml_mul_mat(ctx, o_proj, attn_output);
+			inspect_tensor(ctx, layer_graph, attn_output, "attn_output_o");
 			auto residual = ggml_add_inplace(ctx,
 				flatten_tensor(ctx, attn_output), flatten_tensor(ctx, input_emb));
-			ggml_set_name(residual, "attn_out+input");
+			inspect_tensor(ctx, layer_graph, residual, "attn_out_o+input");
+			residual = view_tensor(ctx, residual, 4096u, input_len, batch_size);
 
 			// 层归一化
-			auto mlp_input = ggml_rms_norm(ctx, attn_output, eps);
+			auto mlp_input = ggml_rms_norm(ctx, residual, eps);
 			mlp_input = ggml_mul_inplace(ctx, mlp_input, norm_weight);
-			ggml_set_name(mlp_input, "mlp_input");
+			inspect_tensor(ctx, layer_graph, mlp_input, "mlp_input");
 
 			// MLP 层
 			auto gate = ggml_mul_mat(ctx, gate_proj, mlp_input);
 			auto up = ggml_mul_mat(ctx, up_proj, mlp_input);
+			inspect_tensor(ctx, layer_graph, gate, "gate");
+			inspect_tensor(ctx, layer_graph, up, "up");
 			// SiLU 激活函数
 			gate = ggml_silu_inplace(ctx, gate);
+			inspect_tensor(ctx, layer_graph, gate, "gate_silu");
 			// 逐元素相乘
 			auto gate_up = ggml_mul_inplace(ctx, gate, up);
+			inspect_tensor(ctx, layer_graph, gate_up, "gate_up");
 			// 通过 down_proj 层
 			auto down = ggml_mul_mat(ctx, down_proj, gate_up);
+			inspect_tensor(ctx, layer_graph, down, "down");
 
 			output = ggml_add_inplace(ctx,
 				flatten_tensor(ctx, down), flatten_tensor(ctx, residual));
-			ggml_set_name(output, "residual_output");
+			inspect_tensor(ctx, layer_graph, output, "output");
 		}
 		ggml_build_forward_expand(layer_graph, output);
 		ggml_free(ctx);
@@ -408,55 +441,24 @@ public:
 		ggml_gallocr* layer_galloc,
 		size_t batch_size,
 		size_t input_len,
-		bool save_mid_tensors = false
+		bool save_details = false
 	)
 	{
-		global_timer.Start(ModelTimer::TimerType::Layer);
-		if (!backend)
+		std::function<
+			void(ggml_context*, ggml_cgraph*, ggml_tensor*, const char*)
+		> inspect_tensor = [](ggml_context*, ggml_cgraph*, ggml_tensor*, const char*) {};
+		if (save_details)
 		{
-			auto gr = build_llama_layer(batch_size, input_len);
-			backend = ggml_backend_cpu_init();
-			ggml_backend_cpu_set_n_threads(backend, num_threads);
-			auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
-			ggml_gallocr_reserve(ga, gr);
-			if (!ggml_gallocr_alloc_graph(ga, gr))
-				throw std::runtime_error("Cannot allocate graph in LlamaDecoderLayer");
-
-			auto input_embs_tensor = ggml_graph_get_tensor(gr, "input_emb");
-			ggml_backend_tensor_set(input_embs_tensor, input_embs_data.data(), 0, input_embs_data.size());
-			auto pos_ids = ggml_graph_get_tensor(gr, "pos_ids");
-			auto pos_ids_generator = std::views::iota(0, int32_t(input_len));
-			std::vector<int> pos_ids_data(input_len);
-			std::copy(pos_ids_generator.begin(), pos_ids_generator.end(), pos_ids_data.begin());
-			ggml_backend_tensor_set(pos_ids, pos_ids_data.data(), 0, ggml_nbytes(pos_ids));
-
-			ggml_backend_graph_compute(backend, gr);
-			auto output = ggml_graph_node(gr, -1);
-			std::vector<uint8_t> result(ggml_nbytes(output));
-			ggml_backend_tensor_get(output, result.data(), 0, result.size());
-			global_timer.Stop(ModelTimer::TimerType::Layer);
-
-			if (save_mid_tensors)
-			{
-				auto mid_tensors = get_mid_tensors(gr);
-				for (auto tensor : mid_tensors)
-				{
-					std::ofstream ofs(
-						"inspect/" + std::string(tensor->name) + ".bin", std::ios::binary);
-					std::vector<char> data(ggml_nbytes(tensor));
-					ggml_backend_tensor_get(tensor, data.data(), 0, data.size());
-					ofs.write(data.data(), data.size());
-				}
-			}
-
-			ggml_gallocr_free(ga);
-			ggml_backend_free(backend);
-			backend = nullptr;
-			return result;
+			mid_tensor_names.clear();
+			inspect_tensor = std::bind(&LlamaDecoderLayer::register_inspect_tensor,
+				std::ref(*this), std::placeholders::_1, std::placeholders::_2,
+				std::placeholders::_3, std::placeholders::_4);
 		}
 
+		global_timer.Start(ModelTimer::TimerType::Layer);
+
 		global_timer.Start(ModelTimer::TimerType::BuildGraph);
-		auto gr = build_llama_layer(batch_size, input_len);
+		auto gr = build_llama_layer(batch_size, input_len, inspect_tensor);
 		ggml_gallocr_reserve(layer_galloc, gr);
 		if (!ggml_gallocr_alloc_graph(layer_galloc, gr))
 			throw std::runtime_error("Cannot allocate graph in LlamaDecoderLayer");
@@ -484,13 +486,33 @@ public:
 
 		global_timer.Stop(ModelTimer::TimerType::Layer);
 
-		if (save_mid_tensors)
+		if (save_details)
 		{
+			std::string backend_name;
+			if (ggml_backend_is_cpu(backend))
+				backend_name = "cpu";
+			else if (ggml_backend_is_cuda(backend))
+				backend_name = "cuda";
+			else
+				backend_name = "unknown";
+
+			ggml_graph_dump_dot(gr, nullptr, (
+				"inspect/" + backend_name + "/layer_" + std::to_string(layer_idx) + ".dot"
+				).c_str());
+
 			auto mid_tensors = get_mid_tensors(gr);
 			for (auto tensor : mid_tensors)
 			{
-				std::ofstream ofs(
-					"inspect/cuda/" + std::string(tensor->name) + ".bin", std::ios::binary);
+				auto file_name = "inspect/" + backend_name + "/" +
+					std::string(tensor->name) + ".bin";
+				std::ofstream ofs(file_name, std::ios::binary);
+				while (!ofs.good())
+				{
+					std::cerr << "无法打开文件：" << file_name << std::endl;
+					std::cout << "回车以重试" << std::endl;
+					std::cin.get();
+					ofs.open(file_name, std::ios::binary);
+				}
 				std::vector<char> data(ggml_nbytes(tensor));
 				ggml_backend_tensor_get(tensor, data.data(), 0, data.size());
 				ofs.write(data.data(), data.size());
@@ -501,6 +523,10 @@ public:
 	}
 
 private:
+	// k v cache
+	std::vector<uint8_t> cached_k;
+	std::vector<uint8_t> cached_v;
+
 	// sdqa attention
 	ggml_tensor* q_proj = nullptr;
 	ggml_tensor* k_proj = nullptr;
@@ -765,17 +791,15 @@ void test()
 		throw std::runtime_error("Failed to open file: embeddings.bin");
 	emb_file.read(reinterpret_cast<char*>(emb.data()), emb.size());
 	emb_file.close();
-	LlamaDecoderLayer layer{ 0 };
-	auto result = layer.run_layer(emb, nullptr, 32, 16, true);
-	/*
+
+	LlamaDecoderLayer layer_data{ 0 };
 	auto cuda = ggml_backend_cuda_init(0);
 	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda));
 	LlamaDecoderLayer gpu_layer{ -1, cuda };
-	layer.FillTo(gpu_layer);
+	layer_data.FillTo(gpu_layer);
 	auto gpu_result = gpu_layer.run_layer(emb, ga, 32, 16, true);
 	ggml_gallocr_free(ga);
 	ggml_backend_free(cuda);
-	*/
 }
 
 int main(int argc, char** argv)
