@@ -382,7 +382,7 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 }
 
 LanguageModel::LanguageModel(
-	bool load_layers, size_t gpu_offload_layer_num, size_t num_cpu_threads
+	bool load_layers, size_t gpu_offload_layer_num, int num_cpu_threads
 )
 	: cuda_backend(ggml_backend_cuda_init(0)),
 	  cpu_backend(ggml_backend_cpu_init()),
@@ -593,7 +593,7 @@ std::vector<int> LanguageModel::sample_once(
 	return sample_result;
 }
 
-inline std::vector<uint8_t> LanguageModel::gen_head_align(
+std::vector<uint8_t> LanguageModel::gen_head_align(
 	std::vector<int> tokens, size_t parallel_size
 ) {
 	std::vector<int> double_tokens(tokens.size() * 2);

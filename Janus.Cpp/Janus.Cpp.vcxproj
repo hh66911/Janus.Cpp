@@ -162,6 +162,7 @@
     <ClInclude Include="quant.h" />
     <ClInclude Include="tensor_utils.h" />
     <ClInclude Include="timer.h" />
+    <ClInclude Include="vq_model.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

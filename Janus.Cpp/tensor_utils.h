@@ -12,7 +12,7 @@ void inline print_shape(const ggml_tensor* tensor)
 	std::cout << "]\n";
 }
 
-void print_tensor_2d(const ggml_tensor* tensor)
+inline void print_tensor_2d(const ggml_tensor* tensor)
 {
 	if (tensor->type == GGML_TYPE_I32)
 	{
@@ -40,7 +40,7 @@ void print_tensor_2d(const ggml_tensor* tensor)
 
 template <typename... DimTypes>
 	requires (std::is_integral_v<DimTypes> && ...)
-ggml_tensor* view_tensor(ggml_context* ctx, ggml_tensor* tensor, DimTypes... dims)
+inline ggml_tensor* view_tensor(ggml_context* ctx, ggml_tensor* tensor, DimTypes... dims)
 {
 	constexpr size_t num_dims = sizeof...(DimTypes);
 	static_assert(num_dims <= GGML_MAX_DIMS);
@@ -66,7 +66,7 @@ ggml_tensor* view_tensor(ggml_context* ctx, ggml_tensor* tensor, DimTypes... dim
 		static_assert(false);
 }
 
-ggml_tensor* flatten_tensor(ggml_context* ctx, ggml_tensor* tensor)
+inline ggml_tensor* flatten_tensor(ggml_context* ctx, ggml_tensor* tensor)
 {
 	auto ne = ggml_nelements(tensor);
 	return ggml_view_1d(ctx, tensor, ne, 0);

@@ -36,6 +36,7 @@ constexpr int num_threads = 16;
 constexpr int num_threads = 1;
 #endif
 
+#include "vq_model.h"
 #include "language_model.h"
 #include "timer.h"
 
@@ -94,27 +95,37 @@ ggml_tensor* generate(
 // 测试代码
 void test()
 {
-	std::vector<uint8_t> emb(8192ull * 1024);
-	std::ifstream emb_file("inspect/embeddings.bin", std::ios::binary);
-	if (!emb_file.is_open())
-		throw std::runtime_error("Failed to open file: embeddings.bin");
-	emb_file.read(reinterpret_cast<char*>(emb.data()), emb.size());
-	emb_file.close();
+	auto cpu_b = ggml_backend_cpu_init();
+	ggml_backend_cpu_set_n_threads(cpu_b, num_threads);
+	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cpu_b));
 
-	LlamaDecoderLayer layer_data{ 0 };
-	auto cuda = ggml_backend_cuda_init(0);
-	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda));
-	LlamaDecoderLayer gpu_layer{ -1, cuda };
-	layer_data.FillTo(gpu_layer);
-	gpu_layer.run_layer(emb, ga, 32, 16, false);
-	emb.resize(emb.size() / 2);
-	auto gpu_result = gpu_layer.run_layer(emb, ga, 32, 8, true);
+	auto ctx = ggml_init({
+		.mem_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE
+				  + ggml_graph_overhead(),
+		.no_alloc = true
+	});
+	auto x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2, 2, 2, 2);
+	Downsample ds{ 2, {}, cpu_b };
+	auto y = ds.calculate(ctx, x);
+
+	auto gr = ggml_new_graph(ctx);
+	ggml_build_forward_expand(gr, y);
+	ggml_gallocr_reserve(ga, gr);
+	ggml_gallocr_alloc_graph(ga, gr);
+	std::fill(static_cast<float*>(x->data),
+		static_cast<float*>(x->data) + 16,
+		1.f);
+	ggml_backend_graph_compute(cpu_b, gr);
+	std::vector<float> result(ggml_nelements(y));
+	ggml_backend_tensor_get(y, result.data(), 0, result.size() * sizeof(float));
+
 	ggml_gallocr_free(ga);
-	ggml_backend_free(cuda);
+	ggml_backend_free(cpu_b);
 }
 
 int main(int argc, char** argv)
 {
+	test(); return -1;
 	{
 		auto language_model = new LanguageModel{ true, 30, num_threads };
 		std::vector<int> input(16);

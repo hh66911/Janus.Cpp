@@ -7,6 +7,7 @@
 #include <vector>
 #include <memory>
 #include <functional>
+#include <filesystem>
 #include <random>
 
 #include "tensor_utils.h"
@@ -118,12 +119,12 @@ private:
 	ggml_backend* cuda_backend = nullptr;
 	ggml_backend* cpu_backend = nullptr;
 	const size_t gpu_offload_num;
-	const size_t num_cpu_threads;
+	const int num_cpu_threads;
 public:
 	LanguageModel(
 		bool load_layers,
 		size_t gpu_offload_layer_num,
-		size_t num_cpu_threads = 1
+		int num_cpu_threads = 1
 	);
 	~LanguageModel() {
 		ggml_free(model_ctx);
@@ -162,7 +163,7 @@ public:
 		size_t parallel_size, float temperature, float cfg_weight
 	);
 
-	inline std::vector<uint8_t> gen_head_align(
+	std::vector<uint8_t> gen_head_align(
 		std::vector<int> tokens,
 		size_t parallel_size
 	);

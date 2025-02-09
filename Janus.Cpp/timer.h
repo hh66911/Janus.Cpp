@@ -8,9 +8,9 @@ private:
 	ModelTimer() = default;
 	ModelTimer(const ModelTimer&) = delete;
 	ModelTimer& operator=(const ModelTimer&) = delete;
-	static ModelTimer global_timer;
 public:
 	static ModelTimer& GetInstance() {
+		static ModelTimer global_timer;
 		return global_timer;
 	}
 public:
