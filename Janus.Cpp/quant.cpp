@@ -41,6 +41,16 @@ void F16TensorFromFile(ggml_context* ctx, ggml_tensor* dst, std::filesystem::pat
 	file.read(reinterpret_cast<char*>(dst->data), ggml_nbytes(dst));
 }
 
+std::vector<uint8_t> F16DataFromFile(std::filesystem::path path)
+{
+	std::ifstream file(path, std::ios::binary);
+	if (!file.is_open())
+		throw std::runtime_error("Failed to open file: " + path.string());
+	std::vector<uint8_t> buffer(std::filesystem::file_size(path));
+	file.read(reinterpret_cast<char*>(buffer.data()), buffer.size());
+	return buffer;
+}
+
 void ConvertModelFile(std::filesystem::path src, std::filesystem::path dst)
 {
 	auto type = GGML_TYPE_Q8_0;

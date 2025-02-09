@@ -138,6 +138,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Janus.Cpp.cpp" />
+    <ClCompile Include="language_model.cpp" />
     <ClCompile Include="quant.cpp" />
   </ItemGroup>
   <ItemGroup>
@@ -157,7 +158,10 @@
     <ClInclude Include="ggml\include\ggml-vulkan.h" />
     <ClInclude Include="ggml\include\ggml.h" />
     <ClInclude Include="ggml\include\gguf.h" />
+    <ClInclude Include="language_model.h" />
     <ClInclude Include="quant.h" />
+    <ClInclude Include="tensor_utils.h" />
+    <ClInclude Include="timer.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

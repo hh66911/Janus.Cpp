@@ -24,6 +24,9 @@
     <ClCompile Include="quant.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="language_model.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml.h">
@@ -75,6 +78,15 @@
       <Filter>GGML</Filter>
     </ClInclude>
     <ClInclude Include="quant.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="language_model.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="tensor_utils.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="timer.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
