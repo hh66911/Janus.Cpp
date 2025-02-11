@@ -33,6 +33,22 @@ void F32TensorFromFile(ggml_context* ctx, ggml_tensor* dst, std::filesystem::pat
 		static_cast<float*>(dst->data)[i] = ggml_fp16_to_fp32(buffer[i]);
 }
 
+std::vector<uint8_t> F32DataFromFile(std::filesystem::path path)
+{
+	std::ifstream file(path, std::ios::binary);
+	if (!file.is_open())
+		throw std::runtime_error("Failed to open file: " + path.string());
+	auto file_size = std::filesystem::file_size(path);
+	auto element_num = file_size / 2;
+	std::vector<ggml_fp16_t> buffer(element_num);
+	std::vector<uint8_t> float_buffer(element_num * 4);
+	file.read(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(ggml_fp16_t));
+#pragma omp parallel for
+	for (int i = 0; i < buffer.size(); ++i)
+		reinterpret_cast<float*>(float_buffer.data())[i] = ggml_fp16_to_fp32(buffer[i]);
+	return float_buffer;
+}
+
 void F16TensorFromFile(ggml_context* ctx, ggml_tensor* dst, std::filesystem::path path)
 {
 	std::ifstream file(path, std::ios::binary);

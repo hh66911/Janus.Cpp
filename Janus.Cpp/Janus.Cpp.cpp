@@ -95,32 +95,14 @@ ggml_tensor* generate(
 // 测试代码
 void test()
 {
-	auto cpu_b = ggml_backend_cpu_init();
-	ggml_backend_cpu_set_n_threads(cpu_b, num_threads);
-	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cpu_b));
-
-	auto ctx = ggml_init({
-		.mem_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE
-				  + ggml_graph_overhead(),
-		.no_alloc = true
-	});
-	auto x = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2, 2, 2, 2);
-	Downsample ds{ 2, {}, cpu_b };
-	auto y = ds.calculate(ctx, x);
-
-	auto gr = ggml_new_graph(ctx);
-	ggml_build_forward_expand(gr, y);
-	ggml_gallocr_reserve(ga, gr);
-	ggml_gallocr_alloc_graph(ga, gr);
-	std::fill(static_cast<float*>(x->data),
-		static_cast<float*>(x->data) + 16,
-		1.f);
-	ggml_backend_graph_compute(cpu_b, gr);
-	std::vector<float> result(ggml_nelements(y));
-	ggml_backend_tensor_get(y, result.data(), 0, result.size() * sizeof(float));
-
-	ggml_gallocr_free(ga);
-	ggml_backend_free(cpu_b);
+	// auto backend = ggml_backend_cuda_init(0);
+	auto backend = ggml_backend_cpu_init();
+	ggml_backend_cpu_set_n_threads(backend, num_threads);
+	GenDecoder decoder{ backend };
+	auto input_gen = std::views::iota(0, 576);
+	std::vector<int> input(input_gen.begin(), input_gen.end());
+	auto img = decoder.decode_img_tokens(input, 1, 24);
+	ggml_backend_free(backend);
 }
 
 int main(int argc, char** argv)
