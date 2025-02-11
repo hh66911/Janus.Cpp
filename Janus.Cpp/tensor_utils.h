@@ -1,7 +1,9 @@
 #pragma once
 
 #include <ggml.h>
+#include <ggml-backend.h>
 #include <iostream>
+#include <vector>
 #include <ranges>
 
 void inline print_shape(const ggml_tensor* tensor)
@@ -71,3 +73,68 @@ inline ggml_tensor* flatten_tensor(ggml_context* ctx, ggml_tensor* tensor)
 	auto ne = ggml_nelements(tensor);
 	return ggml_view_1d(ctx, tensor, ne, 0);
 }
+
+class MidTensors
+{
+public:
+	struct TensorInfo
+	{
+		ggml_tensor* tensor;
+		ggml_context* ctx;
+		ggml_cgraph* graph;
+	};
+
+private:
+	inline auto GetTensors() {
+		return mid_tensors | std::views::transform([](const auto& info) {
+			return info.tensor;
+			});
+	}
+	inline auto GetContexts() {
+		return mid_tensors | std::views::transform([](const auto& info) {
+			return info.ctx;
+			});
+	}
+	inline auto GetGraphs() {
+		return mid_tensors | std::views::transform([](const auto& info) {
+			return info.graph;
+			});
+	}
+
+private:
+	std::vector<TensorInfo> mid_tensors;
+	bool enable_register = false;
+
+private:
+	MidTensors() = default;
+	MidTensors(const MidTensors&) = delete;
+	MidTensors& operator=(const MidTensors&) = delete;
+
+public:
+	static MidTensors& GetInstance() {
+		static MidTensors instance;
+		return instance;
+	}
+
+public:
+	std::vector<ggml_tensor*> get_mid_tensors(ggml_cgraph* gr);
+
+	void inspect_tensor(
+		ggml_context* ctx, ggml_cgraph* gr,
+		ggml_tensor* target, const char* name
+	);
+
+	inline void StartRegisterMidTensors() {
+		enable_register = true;
+	}
+
+	inline void StopRegisterMidTensors() {
+		enable_register = false;
+	}
+
+	inline void ClearMidTensors() {
+		mid_tensors.clear();
+	}
+
+	void SaveMidTensors(const std::string& path);
+};

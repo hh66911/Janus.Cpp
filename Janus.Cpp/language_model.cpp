@@ -3,29 +3,6 @@
 #include "quant.h"
 #include "timer.h"
 
-std::vector<ggml_tensor*> LlamaDecoderLayer::get_mid_tensors(ggml_cgraph* gr)
-{
-	std::vector<ggml_tensor*> mid_tensors;
-	for (const auto& name : mid_tensor_names)
-	{
-		auto tensor = ggml_graph_get_tensor(gr, name.c_str());
-		if (tensor)
-			mid_tensors.push_back(tensor);
-	}
-	return mid_tensors;
-}
-
-void LlamaDecoderLayer::inspect_tensor(
-	this LlamaDecoderLayer& self,
-	ggml_context* ctx, ggml_cgraph* gr,
-	ggml_tensor* target, const char* name
-) {
-	target = ggml_cont(ctx, target);
-	ggml_set_name(target, name);
-	ggml_build_forward_expand(gr, target);
-	self.mid_tensor_names.push_back(name);
-}
-
 LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 	: backend(container), layer_idx(layer_index)
 {
@@ -214,8 +191,8 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 			head_dim, input_len, num_heads, batch_size);
 		v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)),
 			input_len, head_dim, num_heads, batch_size);
-		inspect_tensor(ctx, layer_graph, k, "k_new");
-		inspect_tensor(ctx, layer_graph, v, "v_new");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_new");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_new");
 
 		// Á¬½Ó Cached K, V
 		if (cached_length > 0)
@@ -242,7 +219,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		// QK_masked = mask_past(QK_scaled)
 		ggml_tensor* QK_masked = ggml_diag_mask_inf_inplace(
 			ctx, QK_scaled, cached_length);
-		inspect_tensor(ctx, layer_graph, QK_masked, "QK_masked");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, QK_masked, "QK_masked");
 		// QK = soft_max(QK_masked)
 		ggml_tensor* QK_soft_max = ggml_soft_max_inplace(ctx, QK_masked);
 		// attn_output = QK * V^T | Shape: [batch, num_head, seq_len, head_dim]
@@ -287,12 +264,14 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Layer);
 
 
+	if (save_details) MidTensors::GetInstance().StartRegisterMidTensors();
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::BuildGraph);
 	auto gr = build_llama_layer(batch_size, input_len);
 	ggml_gallocr_reserve(layer_galloc, gr);
 	if (!ggml_gallocr_alloc_graph(layer_galloc, gr))
 		throw std::runtime_error("Cannot allocate graph in LlamaDecoderLayer");
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::BuildGraph);
+	if (save_details) MidTensors::GetInstance().StopRegisterMidTensors();
 
 
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::CopyTensor);
@@ -359,7 +338,7 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 			"inspect/" + backend_name + "/layer_" + std::to_string(layer_idx) + ".dot"
 			).c_str());
 
-		auto mid_tensors = get_mid_tensors(gr);
+		auto mid_tensors = MidTensors::GetInstance().get_mid_tensors(gr);
 		for (auto tensor : mid_tensors)
 		{
 			auto file_name = "inspect/" + backend_name + "/" +

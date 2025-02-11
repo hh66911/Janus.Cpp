@@ -27,6 +27,9 @@
     <ClCompile Include="language_model.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="tensor_utils.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml.h">

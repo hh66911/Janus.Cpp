@@ -104,7 +104,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
@@ -123,7 +123,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
@@ -140,6 +140,7 @@
     <ClCompile Include="Janus.Cpp.cpp" />
     <ClCompile Include="language_model.cpp" />
     <ClCompile Include="quant.cpp" />
+    <ClCompile Include="tensor_utils.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml-alloc.h" />

@@ -48,14 +48,6 @@ private:
 	ggml_context* layer_ctx = nullptr;
 	ggml_backend* backend;
 
-	std::vector<std::string> mid_tensor_names;
-	std::vector<ggml_tensor*> get_mid_tensors(ggml_cgraph* gr);
-	// 会注册中间张量
-	void inspect_tensor(
-		this LlamaDecoderLayer& self,
-		ggml_context* ctx, ggml_cgraph* gr,
-		ggml_tensor* target, const char* name
-	);
 public:
 	LlamaDecoderLayer(
 		int layer_index = -1,

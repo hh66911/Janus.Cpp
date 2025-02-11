@@ -104,6 +104,7 @@ public:
 			return F16DataFromFile(target.value());
 		else if (type == GGML_TYPE_F32)
 			return F32DataFromFile(target.value());
+		throw std::runtime_error("Unsupported data type");
 	}
 
 	inline void LoadToBackend(ggml_tensor* out)
@@ -126,10 +127,11 @@ private:
 public:
 	Convolution(
 		unsigned ch_in, unsigned ch_out,
+		unsigned kernel_size,
 		DataEater weight_data,
 		ggml_backend* backend
 	)
-		: cin(ch_in), cout(ch_out)
+		: cin(ch_in), cout(ch_out), kernel_size(kernel_size)
 	{
 		ggml_init_params block_params = {
 			.mem_size = ggml_tensor_overhead() * 2,
@@ -175,22 +177,25 @@ public:
 			.no_alloc = true
 		};
 		block_ctx = ggml_init(block_params);
-		norm = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		norm_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F32, 1, 1, ch_in);
+		weight = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F32, 1, 1, ch_in);
+		bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F32, 1, 1, ch_in);
 		ggml_backend_alloc_ctx_tensors(block_ctx, backend);
-		weight_data["norm"].LoadToBackend(norm);
-		weight_data["norm_bias"].LoadToBackend(norm_bias);
+		weight_data["weight"].LoadToBackend(weight);
+		weight_data["bias"].LoadToBackend(bias);
 	}
-	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input)
+	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input, bool inplace)
 	{
-		auto x = ggml_group_norm(ctx, input, group_norm_n_groups, 1e-6f);
-		x = ggml_add_inplace(ctx, ggml_mul_inplace(ctx, x, norm), norm_bias);
-		return ggml_sigmoid_inplace(ctx, x);
+		ggml_tensor* x;
+		if (inplace)
+			x = ggml_group_norm_inplace(ctx, input, group_norm_n_groups, 1e-6f);
+		else
+			x = ggml_group_norm(ctx, input, group_norm_n_groups, 1e-6f);
+		return ggml_add_inplace(ctx, ggml_mul_inplace(ctx, x, weight), bias);
 	}
 
 private:
-	ggml_tensor* norm;
-	ggml_tensor* norm_bias;
+	ggml_tensor* weight;
+	ggml_tensor* bias;
 };
 
 class ResNetBlock
@@ -201,8 +206,6 @@ private:
 	const unsigned group_norm_n_groups = 32;
 	const unsigned kernel_size = 3;
 
-	ggml_context* block_ctx;
-
 public:
 	ResNetBlock(
 		unsigned ch_in, unsigned ch_out,
@@ -211,22 +214,20 @@ public:
 	)
 		: cin(ch_in), cout(ch_out),
 		norm1{ ch_in, weight_data["norm1"], backend },
-		conv_in{ ch_in, ch_out, weight_data["conv_in"], backend },
+		conv_in{ ch_in, ch_out, 3, weight_data["conv_in"], backend },
 		norm2{ ch_out, weight_data["norm2"], backend },
-		conv_out{ ch_out, ch_out, weight_data["conv_out"], backend }
+		conv_out{ ch_out, ch_out, 3, weight_data["conv_out"], backend }
 	{
 		if (ch_in != ch_out)
-		{
-
-		}
+			nin_shortcut.emplace(ch_in, ch_out, 1, weight_data["nin_shortcut"], backend);
 	};
 
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input)
 	{
-		auto x = norm1(ctx, input);
+		auto x = norm1(ctx, input, false);
 		x = ggml_sigmoid_inplace(ctx, x);
 		x = conv_in(ctx, x);
-		x = norm2(ctx, x);
+		x = norm2(ctx, x, true);
 		x = ggml_sigmoid_inplace(ctx, x);
 		x = conv_out(ctx, x);
 		if (nin_shortcut)
@@ -267,7 +268,7 @@ public:
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input) {
 		auto x = input;
 		for (auto& resblock : resblocks)
-			x = resblock.operator()(ctx, x);
+			x = resblock(ctx, x);
 		return x;
 	}
 private:
@@ -280,64 +281,27 @@ private:
 	const unsigned cin;
 	const unsigned group_norm_n_groups = 32;
 
-	ggml_context* block_ctx;
-
 public:
 	AttnBlock(
 		unsigned ch_in,
 		DataEater weight_data,
 		ggml_backend* backend
-	) : cin(ch_in)
+	)
+		: cin(ch_in),
+		q_proj{ ch_in, ch_in, 1, weight_data["q_proj"], backend },
+		k_proj{ ch_in, ch_in, 1, weight_data["k_proj"], backend },
+		v_proj{ ch_in, ch_in, 1, weight_data["v_proj"], backend },
+		o_proj{ ch_in, ch_in, 1, weight_data["o_proj"], backend },
+		norm{ ch_in, weight_data["norm"], backend }
 	{
-		const size_t tensor_num = 10;
-		ggml_init_params block_params = {
-			.mem_size = ggml_tensor_overhead() * tensor_num,
-			.no_alloc = true
-		};
-		block_ctx = ggml_init(block_params);
-		norm = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		norm_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		q_proj = ggml_new_tensor_4d(block_ctx, GGML_TYPE_F16,
-			1, 1, ch_in, ch_in);
-		k_proj = ggml_new_tensor_4d(block_ctx, GGML_TYPE_F16,
-			1, 1, ch_in, ch_in);
-		v_proj = ggml_new_tensor_4d(block_ctx, GGML_TYPE_F16,
-			1, 1, ch_in, ch_in);
-		o_proj = ggml_new_tensor_4d(block_ctx, GGML_TYPE_F16,
-			1, 1, ch_in, ch_in);
-		q_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		k_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		v_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		o_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		ggml_backend_alloc_ctx_tensors(block_ctx, backend);
-
-		weight_data["norm"].LoadToBackend(norm);
-		weight_data["norm_bias"].LoadToBackend(norm_bias);
-		weight_data["q_proj"].LoadToBackend(q_proj);
-		weight_data["k_proj"].LoadToBackend(k_proj);
-		weight_data["v_proj"].LoadToBackend(v_proj);
-		weight_data["o_proj"].LoadToBackend(o_proj);
-		weight_data["q_bias"].LoadToBackend(q_bias);
-		weight_data["k_bias"].LoadToBackend(k_bias);
-		weight_data["v_bias"].LoadToBackend(v_bias);
-		weight_data["o_bias"].LoadToBackend(o_bias);
-	}
-
-	~AttnBlock() {
-		ggml_free(block_ctx);
 	}
 
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input)
 	{
-		auto x = ggml_group_norm(ctx, input, group_norm_n_groups, 1e-6f);
-		x = ggml_add_inplace(ctx, ggml_mul_inplace(ctx, x, norm), norm_bias);
-
-		auto q = ggml_conv_2d_s1_ph(ctx, q_proj, x);
-		auto k = ggml_conv_2d_s1_ph(ctx, k_proj, x);
-		auto v = ggml_conv_2d_s1_ph(ctx, v_proj, x);
-		q = ggml_add_inplace(ctx, q, q_bias);
-		k = ggml_add_inplace(ctx, k, k_bias);
-		v = ggml_add_inplace(ctx, v, v_bias);
+		auto x = norm(ctx, input, false);
+		auto q = q_proj(ctx, x);
+		auto k = k_proj(ctx, x);
+		auto v = v_proj(ctx, x);
 
 		size_t width = x->ne[0], height = x->ne[1];
 		size_t batch = x->ne[3];
@@ -349,46 +313,29 @@ public:
 		v = view_tensor(ctx, v, width * height, 1ull, cin, batch);
 		auto attn_output = ggml_mul_mat(ctx, v, QK_soft_max);
 		attn_output = view_tensor(ctx, attn_output, width, height, cin, batch);
-		attn_output = ggml_conv_2d_s1_ph(ctx, o_proj, attn_output);
+		attn_output = o_proj(ctx, attn_output);
 		return ggml_add_inplace(ctx, attn_output, input);
 	}
 
 private:
-	ggml_tensor* norm, * norm_bias;
-	ggml_tensor* q_proj, *q_bias;
-	ggml_tensor* k_proj, *k_bias;
-	ggml_tensor* v_proj, *v_bias;
-	ggml_tensor* o_proj, *o_bias;
+	GroupNorm norm;
+	Convolution q_proj, k_proj, v_proj, o_proj;
 };
 
 class Downsample
 {
 private:
 	const unsigned cin;
-	ggml_context* block_ctx;
 
 public:
 	Downsample(
 		unsigned ch_in,
 		DataEater weight_data,
 		ggml_backend* backend
-	) : cin(ch_in)
+	)
+		: cin(ch_in),
+		conv{ ch_in, ch_in, 3, weight_data["conv"], backend }
 	{
-		ggml_init_params block_params = {
-			.mem_size = ggml_tensor_overhead(),
-			.no_alloc = true
-		};
-		block_ctx = ggml_init(block_params);
-		conv = ggml_new_tensor_4d(block_ctx,
-			GGML_TYPE_F16, 3, 3, ch_in, ch_in);
-		conv_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		ggml_backend_alloc_ctx_tensors(block_ctx, backend);
-		weight_data["conv"].LoadToBackend(conv);
-		weight_data["conv_bias"].LoadToBackend(conv_bias);
-	}
-
-	~Downsample() {
-		ggml_free(block_ctx);
 	}
 
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input) {
@@ -398,52 +345,36 @@ public:
 		padded = ggml_scale_inplace(ctx, padded, 0.f);
 		padded = ggml_set_2d_inplace(ctx, padded, input,
 			4 * (width + 1), 4 * (width + 2));
-		padded = ggml_conv_2d(ctx, conv, padded, 2, 2, 1, 1, 1, 1);
-		return ggml_add_inplace(ctx, padded, conv_bias);
+		return conv(ctx, padded);
 	}
 
 private:
-	ggml_tensor* conv;
-	ggml_tensor* conv_bias;
+	Convolution conv;
 };
 
 class Upsample
 {
 private:
 	const unsigned cin;
-	ggml_context* block_ctx;
 
 public:
 	Upsample(
 		unsigned ch_in,
 		DataEater weight_data,
 		ggml_backend* backend
-	) : cin(ch_in)
+	)
+		: cin(ch_in),
+		conv{ ch_in, ch_in, 3, weight_data["conv"], backend }
 	{
-		ggml_init_params block_params = {
-			.mem_size = ggml_tensor_overhead() * 2,
-			.no_alloc = true
-		};
-		block_ctx = ggml_init(block_params);
-		conv = ggml_new_tensor_4d(block_ctx,
-			GGML_TYPE_F16, 3, 3, ch_in, ch_in);
-		conv_bias = ggml_new_tensor_3d(block_ctx, GGML_TYPE_F16, 1, 1, ch_in);
-		ggml_backend_alloc_ctx_tensors(block_ctx, backend);
-		weight_data["conv"].LoadToBackend(conv);
-		weight_data["conv_bias"].LoadToBackend(conv_bias);
 	}
-	~Upsample() {
-		ggml_free(block_ctx);
-	}
+
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input) {
 		auto width = input->ne[0], height = input->ne[1];
 		auto x = ggml_upscale(ctx, input, 2);
-		return ggml_conv_2d_s1_ph(ctx, conv, x);
+		return conv(ctx, x);
 	}
-
 private:
-	ggml_tensor* conv;
-	ggml_tensor* conv_bias;
+	Convolution conv;
 };
 
 class VQ_Encoder
@@ -453,7 +384,6 @@ private:
 	const unsigned resblock_ch = 128;
 	const unsigned z_channels = 256;
 
-	ggml_context* encoder_ctx;
 public:
 	VQ_Encoder(
 		unsigned ch_in,
@@ -473,22 +403,11 @@ public:
 		midattn{
 			resblock_ch * ch_mult.back(),
 			weight_data, backend
-		}
+		},
+		conv_in{ in_channels, resblock_ch, 3, weight_data["conv_in"], backend },
+		conv_out{ resblock_ch, z_channels, 3, weight_data["conv_out"], backend },
+		norm_out{ resblock_ch, weight_data["norm_out"], backend }
 	{
-		const size_t tensor_num = 2;
-		ggml_init_params block_params = {
-			.mem_size = ggml_tensor_overhead() * tensor_num,
-			.no_alloc = true
-		};
-		encoder_ctx = ggml_init(block_params);
-		conv_in = ggml_new_tensor_4d(encoder_ctx, GGML_TYPE_F16,
-			4, 4, ch_in, resblock_ch);
-		conv_out = ggml_new_tensor_4d(encoder_ctx, GGML_TYPE_F16,
-			1, 1, resblock_ch, z_channels);
-		conv_in_bias = ggml_new_tensor_3d(encoder_ctx, GGML_TYPE_F16, 1, 1, resblock_ch);
-		conv_out_bias = ggml_new_tensor_3d(encoder_ctx, GGML_TYPE_F16, 1, 1, z_channels);
-		ggml_backend_alloc_ctx_tensors(encoder_ctx, backend);
-
 		res_blocks.reserve(ch_mult.size());
 		down_samples.reserve(ch_mult.size() - 1);
 		for (size_t i = 0; i < ch_mult.size(); i++)
@@ -508,36 +427,31 @@ public:
 		}
 	}
 
-	ggml_tensor* compute(ggml_context* ctx, ggml_tensor* input)
+	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input)
 	{
-		auto x = ggml_conv_2d_s1_ph(ctx, conv_in, input);
+		auto x = conv_in(ctx, input);
 		for (auto i : std::views::iota(0ull, ch_mult.size() - 1))
 		{
-			x = res_blocks[i].operator()(ctx, x);
+			x = res_blocks[i](ctx, x);
 			if (i != ch_mult.size() - 1)
-				x = down_samples[i].operator()(ctx, x);
+				x = down_samples[i](ctx, x);
 		}
-		x = res_blocks.back().operator()(ctx, x);
+		x = res_blocks.back()(ctx, x);
 		for (auto& attn : attn_blocks)
-			x = attn.operator()(ctx, x);
+			x = attn(ctx, x);
 
-		x = midres1.operator()(ctx, x);
-		x = midattn.operator()(ctx, x);
-		x = midres2.operator()(ctx, x);
+		x = midres1(ctx, x);
+		x = midattn(ctx, x);
+		x = midres2(ctx, x);
 
-		x = ggml_group_norm_inplace(ctx, x, 32, 1e-6f);
-		x = ggml_add_inplace(ctx, ggml_mul_inplace(ctx, x, norm_out), norm_out_bias);
-		x = ggml_silu_inplace(ctx, x);
+		x = norm_out(ctx, x, true);
+		x = ggml_sigmoid_inplace(ctx, x);
 
-		return ggml_conv_2d_s1_ph(ctx, conv_out, x);
+		return conv_out(ctx, x);
 	}
 private:
-	ggml_tensor* conv_in;
-	ggml_tensor* conv_in_bias;
-	ggml_tensor* norm_out;
-	ggml_tensor* norm_out_bias;
-	ggml_tensor* conv_out;
-	ggml_tensor* conv_out_bias;
+	Convolution conv_in, conv_out;
+	GroupNorm norm_out;
 
 	std::vector<GroupedResBlock> res_blocks;
 	std::vector<Downsample> down_samples;
@@ -616,7 +530,6 @@ class VQ_Decoder
 private:
 	const unsigned resblock_ch = 128;
 	const unsigned z_channels = 256;
-	ggml_context* decoder_ctx;
 
 public:
 	VQ_Decoder(
@@ -637,31 +550,12 @@ public:
 		midattn{
 			resblock_ch * ch_mult.back(),
 			block_data("mid", "attn"), backend
-		}
+		},
+		conv_in{ z_channels, resblock_ch * ch_mult.back(), 3, block_data["conv_in"], backend},
+		conv_out{ resblock_ch, 3, 3, block_data["conv_out"], backend },
+		norm_out{ resblock_ch, block_data["norm_out"], backend }
 	{
 		auto ch_mult_rev = ch_mult | std::views::reverse;
-
-		decoder_ctx = ggml_init({
-			.mem_size = ggml_tensor_overhead() * 6,
-			.no_alloc = true
-			});
-		conv_in = ggml_new_tensor_4d(decoder_ctx, GGML_TYPE_F16,
-			3, 3, z_channels, resblock_ch * ch_mult_rev[0]);
-		conv_in_bias = ggml_new_tensor_3d(decoder_ctx, GGML_TYPE_F16,
-			1, 1, resblock_ch * ch_mult_rev[0]);
-		norm_out = ggml_new_tensor_3d(decoder_ctx, GGML_TYPE_F16, 1, 1, resblock_ch);
-		norm_out_bias = ggml_new_tensor_3d(decoder_ctx, GGML_TYPE_F16, 1, 1, resblock_ch);
-		conv_out = ggml_new_tensor_4d(decoder_ctx, GGML_TYPE_F16,
-			3, 3, resblock_ch, 3);
-		conv_out_bias = ggml_new_tensor_3d(decoder_ctx, GGML_TYPE_F16, 1, 1, 3);
-		ggml_backend_alloc_ctx_tensors(decoder_ctx, backend);
-		block_data["conv_in"].LoadToBackend(conv_in);
-		block_data["conv_in_bias"].LoadToBackend(conv_in_bias);
-		block_data["norm_out"].LoadToBackend(norm_out);
-		block_data["norm_out_bias"].LoadToBackend(norm_out_bias);
-		block_data["conv_out"].LoadToBackend(conv_out);
-		block_data["conv_out_bias"].LoadToBackend(conv_out_bias);
-
 		res_blocks.reserve(ch_mult.size());
 		up_samples.reserve(ch_mult.size() - 1);
 		attn_blocks.reserve(3);
@@ -691,46 +585,35 @@ public:
 			);
 		}
 	}
-	~VQ_Decoder() {
-		ggml_free(decoder_ctx);
-	}
 
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* z)
 	{
-		auto x = ggml_conv_2d_s1_ph(ctx, conv_in, z);
-		x = ggml_add_inplace(ctx, x, conv_in_bias);
+		auto x = conv_in(ctx, z);
 
-		x = midres1.operator()(ctx, x);
-		x = midattn.operator()(ctx, x);
-		x = midres2.operator()(ctx, x);
+		x = midres1(ctx, x);
+		x = midattn(ctx, x);
+		x = midres2(ctx, x);
 
-		x = res_blocks[0].operator()(ctx, x);
+		x = res_blocks[0](ctx, x);
 		for (auto& attn : attn_blocks)
-			x = attn.operator()(ctx, x);
-		x = up_samples[0].operator()(ctx, x);
+			x = attn(ctx, x);
+		x = up_samples[0](ctx, x);
 		for (auto i : std::views::iota(1ull, ch_mult.size()))
 		{
-			x = res_blocks[i].operator()(ctx, x);
+			x = res_blocks[i](ctx, x);
 			if (i != ch_mult.size() - 1)
-				x = up_samples[i].operator()(ctx, x);
+				x = up_samples[i](ctx, x);
 		}
 
-		x = ggml_group_norm_inplace(ctx, x, 32, 1e-6f);
-		x = ggml_add_inplace(ctx, ggml_mul_inplace(ctx, x, norm_out), norm_out_bias);
-		x = ggml_silu_inplace(ctx, x);
+		x = norm_out(ctx, x, true);
+		x = ggml_sigmoid_inplace(ctx, x);
 
-		x = ggml_conv_2d_s1_ph(ctx, conv_out, x);
-		x = ggml_add_inplace(ctx, x, conv_out_bias);
-		return x;
+		return conv_out(ctx, x);
 	}
 
 private:
-	ggml_tensor* conv_in;
-	ggml_tensor* conv_in_bias;
-	ggml_tensor* norm_out;
-	ggml_tensor* norm_out_bias;
-	ggml_tensor* conv_out;
-	ggml_tensor* conv_out_bias;
+	Convolution conv_in, conv_out;
+	GroupNorm norm_out;
 
 	ResNetBlock midres1, midres2;
 	AttnBlock midattn;
@@ -744,33 +627,20 @@ class GenDecoder
 {
 private:
 	const unsigned quant_channels = 8;
-	ggml_context* gen_ctx;
 	ggml_backend* backend;
+	const std::filesystem::path folder = R"(D:\Python\Janus\model-file\vq)";
+	DataEater weight_data;
 
 public:
 	GenDecoder(
 		ggml_backend* backend
 	)
-		: backend(backend)
+		: backend(backend), weight_data{ folder },
+		quant_conv{ 256, quant_channels, 1, weight_data["quant_conv"], backend },
+		post_quant_conv{ quant_channels, 256, 1, weight_data["post_quant_conv"], backend },
+		quant{ weight_data["quantize"], backend },
+		dec{ 3, weight_data["decoder"], backend }
 	{
-		const std::filesystem::path folder = R"(D:\Python\Janus\model-file\vq)";
-		DataEater weight_data(folder);
-
-		gen_ctx = ggml_init({
-			.mem_size = ggml_tensor_overhead() * 4,
-			.no_alloc = true
-		});
-		quant_conv = ggml_new_tensor_4d(gen_ctx, GGML_TYPE_F16, 1, 1, 256, 8);
-		quant_conv_bias = ggml_new_tensor_3d(gen_ctx, GGML_TYPE_F16, 1, 1, 8);
-		post_quant_conv = ggml_new_tensor_4d(gen_ctx, GGML_TYPE_F16, 1, 1, 8, 256);
-		post_quant_conv_bias = ggml_new_tensor_3d(gen_ctx, GGML_TYPE_F16, 1, 1, 256);
-		ggml_backend_alloc_ctx_tensors(gen_ctx, backend);
-
-		weight_data["quant_conv"].LoadToBackend(quant_conv);
-		weight_data["post_quant_conv"].LoadToBackend(post_quant_conv);
-
-		quant = std::make_shared<VQ_Quantizer>(weight_data["quantize"], backend);
-		dec = std::make_shared<VQ_Decoder>(3, weight_data["decoder"], backend);
 	}
 
 	std::vector<uint8_t> decode_img_tokens(
@@ -785,12 +655,11 @@ public:
 		});
 
 		auto input = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, tokens.size());
-		auto x = quant->get_rows(ctx, input);
+		auto x = quant.get_rows(ctx, input);
 		x = view_tensor(ctx, ggml_permute(ctx, x, 1, 0, 2, 3),
 			patch_nums, patch_nums, 8ull, parallel_size);
-		x = ggml_conv_2d_s1_ph(ctx, post_quant_conv, x);
-		x = ggml_add_inplace(ctx, x, post_quant_conv_bias);
-		x = dec->operator()(ctx, x);
+		x = post_quant_conv(ctx, x);
+		x = dec(ctx, x);
 
 		auto gr = ggml_new_graph(ctx);
 		ggml_build_forward_expand(gr, x);
@@ -808,11 +677,9 @@ public:
 	}
 
 private:
-	ggml_tensor* quant_conv;
-	ggml_tensor* quant_conv_bias;
-	ggml_tensor* post_quant_conv;
-	ggml_tensor* post_quant_conv_bias;
+	Convolution quant_conv;
+	Convolution post_quant_conv;
 
-	std::shared_ptr<VQ_Quantizer> quant;
-	std::shared_ptr<VQ_Decoder> dec;
+	VQ_Quantizer quant;
+	VQ_Decoder dec;
 };

@@ -29,6 +29,7 @@
 #include <coroutine>
 #include <mdspan>
 #include <random>
+#include <opencv2/opencv.hpp>
 
 #ifndef _DEBUG
 constexpr int num_threads = 16;
@@ -99,10 +100,19 @@ void test()
 	auto backend = ggml_backend_cpu_init();
 	ggml_backend_cpu_set_n_threads(backend, num_threads);
 	GenDecoder decoder{ backend };
-	auto input_gen = std::views::iota(0, 576);
-	std::vector<int> input(input_gen.begin(), input_gen.end());
+	std::vector<int> input(576);
+	for (auto i : std::views::iota(1, 576))
+		input[i] = i;
+	MidTensors::GetInstance().StartRegisterMidTensors();
 	auto img = decoder.decode_img_tokens(input, 1, 24);
+	MidTensors::GetInstance().StopRegisterMidTensors();
+	MidTensors::GetInstance().SaveMidTensors("inspect/vq");
+
 	ggml_backend_free(backend);
+
+	cv::Mat img_mat{ 384, 384, CV_32FC3, img.data() };
+	cv::imshow("Image", img_mat);
+	cv::waitKey(0);
 }
 
 int main(int argc, char** argv)
