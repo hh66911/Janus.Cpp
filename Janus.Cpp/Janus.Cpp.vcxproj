@@ -126,6 +126,8 @@
       <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <OpenMPSupport>true</OpenMPSupport>
+      <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
+      <EnableVectorLength>VectorLength512</EnableVectorLength>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>

@@ -191,8 +191,10 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 			head_dim, input_len, num_heads, batch_size);
 		v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)),
 			input_len, head_dim, num_heads, batch_size);
-		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_new");
-		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_new");
+		auto k_new = ggml_cont(ctx, k); ggml_set_name(k_new, "k_new");
+		auto v_new = ggml_cont(ctx, v); ggml_set_name(v_new, "v_new");
+		ggml_build_forward_expand(layer_graph, k_new);
+		ggml_build_forward_expand(layer_graph, v_new);
 
 		// Á¬½Ó Cached K, V
 		if (cached_length > 0)
@@ -219,7 +221,6 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		// QK_masked = mask_past(QK_scaled)
 		ggml_tensor* QK_masked = ggml_diag_mask_inf_inplace(
 			ctx, QK_scaled, cached_length);
-		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, QK_masked, "QK_masked");
 		// QK = soft_max(QK_masked)
 		ggml_tensor* QK_soft_max = ggml_soft_max_inplace(ctx, QK_masked);
 		// attn_output = QK * V^T | Shape: [batch, num_head, seq_len, head_dim]
@@ -261,6 +262,9 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 	size_t batch_size, size_t input_len,
 	bool save_details
 ) {
+	if (input_embs_data.size() != 4096 * input_len * batch_size * 4)
+		throw std::runtime_error("Input size mismatch");
+
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Layer);
 
 
@@ -417,8 +421,10 @@ std::vector<uint8_t> LanguageModel::preprocess(
 		else
 		{
 			tokens_data[i * input_len] = input_ids[0];
+			tokens_data[(i + 1) * input_len - 1] = input_ids.back();
 			std::fill(tokens_data.begin() + i * input_len + 1,
-				tokens_data.begin() + (i + 1) * input_len, pad_id);
+				tokens_data.begin() + (i + 1) * input_len - 1,
+				pad_id);
 		}
 	}
 
@@ -459,7 +465,7 @@ std::vector<uint8_t> LanguageModel::postprocess(
 	auto hidden_states = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
 		4096ull, input_len, parallel_size * 2);
 	auto out_states = ggml_rms_norm_inplace(ctx, hidden_states, LlamaDecoderLayer::eps);
-	out_states = ggml_mul_inplace(ctx, hidden_states, output_rms_norm);
+	out_states = ggml_mul_inplace(ctx, out_states, output_rms_norm);
 	ggml_build_forward_expand(post_graph, out_states);
 	std::copy(hidden_states_data.begin(), hidden_states_data.end(),
 		static_cast<uint8_t*>(hidden_states->data));
@@ -474,6 +480,8 @@ std::vector<uint8_t> LanguageModel::run_model(
 	std::vector<uint8_t> input_embs_data, size_t parallel_size, size_t input_len
 ) {
 	auto cuda_ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda_backend));
+	if (input_embs_data.size() != parallel_size * 2 * input_len * 4096ull * 4)
+		throw std::runtime_error("Input embeddings size mismatch");
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Model);
 	for (auto i : std::views::iota(0ull, gpu_offload_num))
 	{
@@ -481,14 +489,18 @@ std::vector<uint8_t> LanguageModel::run_model(
 		auto& layer = offloads[i];
 		input_embs_data = layer.run_layer(
 			input_embs_data, cuda_ga, parallel_size * 2, input_len);
+		std::ofstream ofs("inspect/model/layer_" + std::to_string(i) + ".bin", std::ios::binary);
+		ofs.write(reinterpret_cast<const char*>(input_embs_data.data()), input_embs_data.size());
 	}
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::Model);
-	ModelTimer::GetInstance().PrintTimeConsumedAll();
+	// ModelTimer::GetInstance().PrintTimeConsumedAll();
 	auto mem_size = ggml_gallocr_get_buffer_size(cuda_ga, 0);
-	std::cout << "CUDA Graph Memory Usage: " << mem_size << " bytes" << std::endl;
+	// std::cout << "CUDA Graph Memory Usage: " << mem_size << " bytes" << std::endl;
 	ggml_gallocr_free(cuda_ga);
 
 	input_embs_data = postprocess(input_embs_data, parallel_size, input_len);
+	std::ofstream ofs("inspect/model/postprocess.bin", std::ios::binary);
+	ofs.write(reinterpret_cast<const char*>(input_embs_data.data()), input_embs_data.size());
 
 	return input_embs_data;
 }
@@ -537,6 +549,7 @@ std::vector<int> LanguageModel::sample_once(
 	uncond_tensor = ggml_scale_inplace(ctx, uncond_tensor, 1.0f - cfg_weight);
 	auto logits = ggml_add_inplace(ctx, cond_tensor, uncond_tensor);
 	auto probs_tensor = ggml_soft_max_inplace(ctx, logits);
+	probs_tensor = ggml_scale_inplace(ctx, probs_tensor, 1.0f / temperature);
 	ggml_build_forward_expand(gr, probs_tensor);
 
 	ggml_gallocr_reserve(cpu_ga, gr);
@@ -556,18 +569,20 @@ std::vector<int> LanguageModel::sample_once(
 	std::vector<int> sample_result(parallel_size);
 	std::mt19937 gen(std::random_device{}());
 	std::uniform_real_distribution<float> dist(0, 1);
-	for (size_t i = 0; i < parallel_size; i++)
+#pragma omp parallel for
+	for (int i = 0; i < int(parallel_size); i++)
 	{
 		auto p = probs.subspan(i * 16384ull, 16384ull);
-		std::sort(p.begin(), p.end(), std::greater<float>());
+		auto pos_gen = std::views::iota(0, 16384);
+		std::vector<int> pos(pos_gen.begin(), pos_gen.end());
+		std::sort(pos.begin(), pos.end(), [&](int a, int b) {
+			return p[a] > p[b];
+			});
 		auto r = dist(gen);
-		int j = 0;
-		while (r > p[j])
-		{
-			r -= p[j];
-			j++;
-		}
-		sample_result[i] = j;
+		size_t j = 0;
+		while (r > p[pos[j]])
+			r -= p[pos[j++]];
+		sample_result[i] = pos[j];
 	}
 	return sample_result;
 }
@@ -581,7 +596,7 @@ std::vector<uint8_t> LanguageModel::gen_head_align(
 		double_tokens[i * 2] = tokens[i];
 		double_tokens[i * 2 + 1] = tokens[i];
 	}
-	return gen_head.embedding_mlp(tokens, parallel_size);
+	return gen_head.embedding_mlp(double_tokens, parallel_size);
 }
 
 LanguageModel::GenHead::GenHead(ggml_backend* container)
@@ -631,9 +646,9 @@ std::vector<uint8_t> LanguageModel::GenHead::run_head(
 	ggml_build_forward_expand(gr, x);
 
 	ggml_gallocr_reserve(ga, gr);
-	auto mem_size = ggml_gallocr_get_buffer_size(ga, 0);
-	std::cout << "Gen Head memory size: " << std::fixed << std::setprecision(2)
-		<< mem_size / 1024. / 1024 << std::endl;
+	// auto mem_size = ggml_gallocr_get_buffer_size(ga, 0);
+	// std::cout << "Gen Head memory size: " << std::fixed << std::setprecision(2)
+	// 	<< mem_size / 1024. / 1024 << std::endl;
 	ggml_gallocr_alloc_graph(ga, gr);
 	ggml_backend_tensor_set(x0, hidden_states_data.data(), 0, hidden_states_data.size());
 	ggml_backend_graph_compute(gen_head_backend, gr);
@@ -665,9 +680,9 @@ std::vector<uint8_t> LanguageModel::GenHead::embedding_mlp(
 	ggml_build_forward_expand(gr, embs);
 
 	ggml_gallocr_reserve(ga, gr);
-	auto mem_size = ggml_gallocr_get_buffer_size(ga, 0);
-	std::cout << "Gen Head memory size: " << std::fixed << std::setprecision(2)
-		<< mem_size / 1024. / 1024 << std::endl;
+	// auto mem_size = ggml_gallocr_get_buffer_size(ga, 0);
+	// std::cout << "Gen Head memory size: " << std::fixed << std::setprecision(2)
+	// 	<< mem_size / 1024. / 1024 << std::endl;
 	ggml_gallocr_alloc_graph(ga, gr);
 	ggml_backend_tensor_set(ids, tokens.data(), 0, ggml_nbytes(ids));
 	ggml_backend_graph_compute(gen_head_backend, gr);

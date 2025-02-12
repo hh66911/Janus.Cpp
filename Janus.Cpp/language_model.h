@@ -126,8 +126,8 @@ public:
 
 	std::vector<uint8_t> preprocess(
 		std::vector<int> input_ids,
-		size_t parallel_size = 16,
-		size_t image_token_num_per_image = 576
+		size_t parallel_size,
+		size_t image_token_num_per_image
 	);
 
 	std::vector<uint8_t> postprocess(
