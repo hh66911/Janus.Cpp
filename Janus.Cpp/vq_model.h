@@ -19,10 +19,12 @@ private:
 	> weight_data_path;
 	std::optional<std::filesystem::path> target = std::nullopt;
 	const unsigned depth = 0;
+	const std::string cur_name;
 
 private:
-	DataEater(const std::vector<std::filesystem::path>& paths, unsigned depth = 1)
-		: depth(depth)
+	DataEater(const std::vector<std::filesystem::path>& paths,
+		std::string cur_name, unsigned depth = 1)
+		: depth(depth), cur_name(cur_name)
 	{
 		if (paths.empty())
 			throw std::runtime_error("No tensor data found");
@@ -63,7 +65,7 @@ private:
 	}
 public:
 	DataEater(const std::filesystem::path& weight_dir, unsigned depth = 0)
-		: depth(depth)
+		: depth(depth), cur_name("")
 	{
 		for (const auto& path :
 			std::filesystem::directory_iterator(weight_dir)
@@ -87,7 +89,7 @@ public:
 	inline DataEater operator[](const std::string& key) {
 		if (auto it = weight_data_path.find(key);
 			it != weight_data_path.end())
-			return DataEater(it->second, depth + 1);
+			return DataEater(it->second, cur_name + "." + key, depth + 1);
 		throw std::runtime_error("No tensor data found");
 	}
 
@@ -113,6 +115,10 @@ public:
 		if (data.size() != ggml_nbytes(out))
 			throw std::runtime_error("Data size mismatch");
 		ggml_backend_tensor_set(out, data.data(), 0, data.size());
+	}
+
+	inline const std::string& GetName() const {
+		return cur_name;
 	}
 };
 
@@ -205,6 +211,7 @@ private:
 	const unsigned cout;
 	const unsigned group_norm_n_groups = 32;
 	const unsigned kernel_size = 3;
+	const std::string name;
 
 public:
 	ResNetBlock(
@@ -212,7 +219,7 @@ public:
 		DataEater weight_data,
 		ggml_backend* backend
 	)
-		: cin(ch_in), cout(ch_out),
+		: cin(ch_in), cout(ch_out), name(weight_data.GetName()),
 		norm1{ ch_in, weight_data["norm1"], backend },
 		conv_in{ ch_in, ch_out, 3, weight_data["conv_in"], backend },
 		norm2{ ch_out, weight_data["norm2"], backend },
@@ -225,10 +232,10 @@ public:
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input)
 	{
 		auto x = norm1(ctx, input, false);
-		x = ggml_sigmoid_inplace(ctx, x);
+		x = swish_inplace(ctx, x);
 		x = conv_in(ctx, x);
 		x = norm2(ctx, x, true);
-		x = ggml_sigmoid_inplace(ctx, x);
+		x = swish_inplace(ctx, x);
 		x = conv_out(ctx, x);
 		if (nin_shortcut)
 			input = (*nin_shortcut)(ctx, input);
@@ -271,6 +278,13 @@ public:
 			x = resblock(ctx, x);
 		return x;
 	}
+
+	inline const auto& GetBlocks() const {
+		return resblocks;
+	}
+	inline const auto& operator[](size_t idx) const {
+		return resblocks[idx];
+	}
 private:
 	std::vector<ResNetBlock> resblocks;
 };
@@ -280,6 +294,7 @@ class AttnBlock
 private:
 	const unsigned cin;
 	const unsigned group_norm_n_groups = 32;
+	std::string name;
 
 public:
 	AttnBlock(
@@ -292,7 +307,8 @@ public:
 		k_proj{ ch_in, ch_in, 1, weight_data["k_proj"], backend },
 		v_proj{ ch_in, ch_in, 1, weight_data["v_proj"], backend },
 		o_proj{ ch_in, ch_in, 1, weight_data["o_proj"], backend },
-		norm{ ch_in, weight_data["norm"], backend }
+		norm{ ch_in, weight_data["norm"], backend },
+		name(weight_data.GetName())
 	{
 	}
 
@@ -305,13 +321,16 @@ public:
 
 		size_t width = x->ne[0], height = x->ne[1];
 		size_t batch = x->ne[3];
-		q = view_tensor(ctx, q, 1ull, width * height, cin, batch);
-		k = view_tensor(ctx, k, 1ull, width * height, cin, batch);
+		q = ggml_cont(ctx, ggml_permute(ctx, q, 1, 2, 0, 3));
+		k = ggml_cont(ctx, ggml_permute(ctx, k, 1, 2, 0, 3));
+		q = view_tensor(ctx, q, cin, width * height, batch);
+		k = view_tensor(ctx, k, cin, width * height, batch);
 		auto QK = ggml_mul_mat(ctx, k, q); // [width * height, width * height, batch]
 		auto QK_scaled = ggml_scale_inplace(ctx, QK, 1.0f / float(sqrt(cin)));
 		auto QK_soft_max = ggml_soft_max_inplace(ctx, QK_scaled);
-		v = view_tensor(ctx, v, width * height, 1ull, cin, batch);
+		v = view_tensor(ctx, v, width * height, cin, batch);
 		auto attn_output = ggml_mul_mat(ctx, v, QK_soft_max);
+		attn_output = ggml_cont(ctx, ggml_transpose(ctx, attn_output));
 		attn_output = view_tensor(ctx, attn_output, width, height, cin, batch);
 		attn_output = o_proj(ctx, attn_output);
 		return ggml_add_inplace(ctx, attn_output, input);
@@ -445,7 +464,7 @@ public:
 		x = midres2(ctx, x);
 
 		x = norm_out(ctx, x, true);
-		x = ggml_sigmoid_inplace(ctx, x);
+		x = swish_inplace(ctx, x);
 
 		return conv_out(ctx, x);
 	}
@@ -589,26 +608,43 @@ public:
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* z)
 	{
 		auto x = conv_in(ctx, z);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, x, "conv_in");
 
 		x = midres1(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, x, "midres1");
 		x = midattn(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, x, "midattn");
 		x = midres2(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, x, "midres2");
 
-		x = res_blocks[0](ctx, x);
-		for (auto& attn : attn_blocks)
-			x = attn(ctx, x);
+		for (auto [res, attn] : std::views::iota(0, 3)
+			| std::views::transform([this](auto i) {
+				return std::make_pair(res_blocks[0][i], attn_blocks[i]);
+				})) {
+			x = attn(ctx, res(ctx, x));
+		}
+
 		x = up_samples[0](ctx, x);
 		for (auto i : std::views::iota(1ull, ch_mult.size()))
 		{
 			x = res_blocks[i](ctx, x);
-			if (i != ch_mult.size() - 1)
+			MidTensors::GetInstance().inspect_tensor(
+				ctx, nullptr, x, "res_blocks_" + std::to_string(i));
+			if (i != ch_mult.size() - 1) {
 				x = up_samples[i](ctx, x);
+				MidTensors::GetInstance().inspect_tensor(
+					ctx, nullptr, x, "up_samples_" + std::to_string(i));
+			}
 		}
 
 		x = norm_out(ctx, x, true);
-		x = ggml_sigmoid_inplace(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, x, "norm_out");
+		x = swish_inplace(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, x, "swish_out");
 
-		return conv_out(ctx, x);
+		auto out = conv_out(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, nullptr, out, "conv_out");
+		return out;
 	}
 
 private:
@@ -653,20 +689,25 @@ public:
 					  + ggml_graph_overhead(),
 			.no_alloc = true
 		});
+		auto gr = ggml_new_graph(ctx);
 
 		auto input = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, tokens.size());
 		auto x = quant.get_rows(ctx, input);
-		x = view_tensor(ctx, ggml_permute(ctx, x, 1, 0, 2, 3),
+		MidTensors::GetInstance().inspect_tensor(ctx, gr, x, "tokens");
+		x = view_tensor(ctx, ggml_cont(ctx, ggml_transpose(ctx, x)),
 			patch_nums, patch_nums, 8ull, parallel_size);
+		MidTensors::GetInstance().inspect_tensor(ctx, gr, x, "tokens_permuted");
 		x = post_quant_conv(ctx, x);
+		MidTensors::GetInstance().inspect_tensor(ctx, gr, x, "post_quant_conv");
 		x = dec(ctx, x);
 
-		auto gr = ggml_new_graph(ctx);
 		ggml_build_forward_expand(gr, x);
 		ggml_gallocr_reserve(ga, gr);
 		ggml_gallocr_alloc_graph(ga, gr);
 		ggml_backend_tensor_set(input, tokens.data(), 0, ggml_nbytes(input));
 		ggml_backend_graph_compute(backend, gr);
+
+		MidTensors::GetInstance().SaveMidTensors("inspect/vq");
 
 		std::vector<uint8_t> img_data(ggml_nbytes(x));
 		ggml_backend_tensor_get(x, img_data.data(), 0, img_data.size());

@@ -100,17 +100,34 @@ void test()
 	auto backend = ggml_backend_cpu_init();
 	ggml_backend_cpu_set_n_threads(backend, num_threads);
 	GenDecoder decoder{ backend };
-	std::vector<int> input(576);
-	for (auto i : std::views::iota(1, 576))
+	constexpr int patch_nums = 32;
+	constexpr int img_size = patch_nums * 16;
+	std::vector<int> input(patch_nums * patch_nums);
+	for (auto i : std::views::iota(0, patch_nums * patch_nums))
 		input[i] = i;
-	MidTensors::GetInstance().StartRegisterMidTensors();
-	auto img = decoder.decode_img_tokens(input, 1, 24);
-	MidTensors::GetInstance().StopRegisterMidTensors();
-	MidTensors::GetInstance().SaveMidTensors("inspect/vq");
+	auto img = decoder.decode_img_tokens(input, 1, patch_nums);
+	std::ofstream img_file("inspect/img.bin", std::ios::binary);
+	img_file.write((char*)img.data(), img.size());
 
 	ggml_backend_free(backend);
 
-	cv::Mat img_mat{ 384, 384, CV_32FC3, img.data() };
+	cv::Mat img_mat(img_size, img_size, CV_8UC3);
+	auto float_span = std::span(reinterpret_cast<float*>(img.data()), img.size() / sizeof(float));
+	for (auto& f : float_span)
+		f = float(std::clamp((f + 1.) / 2 * 255, 0., 255.));
+	constexpr size_t channel_offset = size_t(img_size) * img_size;
+#pragma omp parallel for
+	for (int i = 0; i < img_size; i++)
+	{
+		for (int j = 0; j < img_size; j++)
+		{
+			auto idx = i * img_size + j;
+			img_mat.at<cv::Vec3b>(i, j) = cv::Vec3b(
+				(uint8_t)float_span[channel_offset * 2 + idx],
+				(uint8_t)float_span[channel_offset * 1 + idx],
+				(uint8_t)float_span[channel_offset * 0 + idx]);
+		}
+	}
 	cv::imshow("Image", img_mat);
 	cv::waitKey(0);
 }
@@ -118,6 +135,39 @@ void test()
 int main(int argc, char** argv)
 {
 	test(); return -1;
+	{
+		ggml_context* ctx = ggml_init({
+			.mem_size = 128ull * 1024 * 1024,
+			});
+
+		auto x = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2);
+		for (int i = 0; i < 3 * 2; i++)
+			reinterpret_cast<float*>(x->data)[i] = i;
+		auto y = ggml_permute(ctx, x, 1, 0, 2, 3);
+		y = ggml_cont(ctx, y);
+
+		auto gr = ggml_new_graph(ctx);
+		ggml_build_forward_expand(gr, y);
+		ggml_graph_compute_with_ctx(ctx, gr, 1);
+		return -1;
+	}
+	{
+		DataEater weight_data{ R"(D:\Python\Janus\model-file\vq)" };
+		auto backend = ggml_backend_cpu_init();
+		ggml_backend_cpu_set_n_threads(backend, 1);
+		Convolution conv{ 8, 256, 1, weight_data["post_quant_conv"], backend };
+		ggml_context* ctx = ggml_init({
+			.mem_size = 128ull * 1024 * 1024,
+			});
+		auto input = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, 2, 2, 8, 1);
+		for (int i = 0; i < 8 * 2 * 2; i++)
+			reinterpret_cast<float*>(input->data)[i] = i;
+		auto output = conv(ctx, input);
+		auto gr = ggml_new_graph(ctx);
+		ggml_build_forward_expand(gr, output);
+		ggml_backend_graph_compute(backend, gr);
+		return -1;
+	}
 	{
 		auto language_model = new LanguageModel{ true, 30, num_threads };
 		std::vector<int> input(16);

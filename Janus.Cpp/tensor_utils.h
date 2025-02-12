@@ -6,6 +6,16 @@
 #include <vector>
 #include <ranges>
 
+inline ggml_tensor* swish(ggml_context* ctx, ggml_tensor* x) {
+	auto x_sig = ggml_sigmoid(ctx, x);
+	return ggml_mul(ctx, x, x_sig);
+}
+
+inline ggml_tensor* swish_inplace(ggml_context* ctx, ggml_tensor* x) {
+	auto x_sig = ggml_sigmoid(ctx, x);
+	return ggml_mul_inplace(ctx, x, x_sig);
+}
+
 void inline print_shape(const ggml_tensor* tensor)
 {
 	std::cout << "Shape: [";
@@ -44,6 +54,8 @@ template <typename... DimTypes>
 	requires (std::is_integral_v<DimTypes> && ...)
 inline ggml_tensor* view_tensor(ggml_context* ctx, ggml_tensor* tensor, DimTypes... dims)
 {
+	if (!ggml_is_contiguous(tensor))
+		throw std::runtime_error("Tensor view source must be contiguous");
 	constexpr size_t num_dims = sizeof...(DimTypes);
 	static_assert(num_dims <= GGML_MAX_DIMS);
 	auto type = tensor->type;
@@ -123,9 +135,14 @@ public:
 		ggml_context* ctx, ggml_cgraph* gr,
 		ggml_tensor* target, const char* name
 	);
+	void inspect_tensor(
+		ggml_context* ctx, ggml_cgraph* gr,
+		ggml_tensor* target, const std::string& name
+	);
 
 	inline void StartRegisterMidTensors() {
 		enable_register = true;
+		ClearMidTensors();
 	}
 
 	inline void StopRegisterMidTensors() {

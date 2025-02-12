@@ -27,10 +27,26 @@ void MidTensors::inspect_tensor(
 		return;
 	target = ggml_cont(ctx, target);
 	ggml_set_name(target, name);
+	if (gr == nullptr) gr = mid_tensors.back().graph;
 	ggml_build_forward_expand(gr, target);
 	mid_tensors.push_back({
 		target, ctx, gr
-	});
+		});
+}
+
+void MidTensors::inspect_tensor(
+	ggml_context* ctx, ggml_cgraph* gr,
+	ggml_tensor* target, const std::string& name
+) {
+	if (!enable_register)
+		return;
+	target = ggml_cont(ctx, target);
+	ggml_set_name(target, name.c_str());
+	if (gr == nullptr) gr = mid_tensors.back().graph;
+	ggml_build_forward_expand(gr, target);
+	mid_tensors.push_back({
+		target, ctx, gr
+		});
 }
 
 void MidTensors::SaveMidTensors(const std::string& path)
