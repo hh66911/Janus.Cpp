@@ -157,7 +157,8 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 
 	auto layer_graph = ggml_new_graph(ctx);
 
-	auto input_emb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4096u, input_len, batch_size);
+	auto input_emb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32,
+		4096u, input_len, batch_size);
 	ggml_set_name(input_emb, "input_emb");
 
 	auto pos_ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, input_len);
@@ -168,28 +169,39 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		// 层归一化 Shape: [batch, seq_len, 4096]
 		auto rms_normed_input = ggml_rms_norm(ctx, input_emb, eps);
 		rms_normed_input = ggml_mul_inplace(ctx, rms_normed_input, input_norm_weight);
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, rms_normed_input, "rms_normed_input");
 
 		auto q = ggml_mul_mat(ctx, q_proj, rms_normed_input);
 		auto k = ggml_mul_mat(ctx, k_proj, rms_normed_input);
 		auto v = ggml_mul_mat(ctx, v_proj, rms_normed_input);
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_raw");
 
 		// 调整形状到 [batch, seq_len, num_head, head_dim]
-		q = view_tensor(ctx, q,
-			head_dim, num_heads, input_len, batch_size);
-		k = view_tensor(ctx, k,
-			head_dim, num_heads, input_len, batch_size);
-		v = view_tensor(ctx, v,
-			head_dim, num_heads, input_len, batch_size);
+		q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
+		q = view_tensor(ctx, q, head_dim, num_heads * batch_size, input_len);
+		k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
+		k = view_tensor(ctx, k, head_dim, num_heads * batch_size, input_len);
+		v = view_tensor(ctx, v, head_dim, num_heads, input_len, batch_size);
 
+		// 注意！！！当使用CUDA作为GGML的Backend时，NeoX的RoPE操作不会遍历batch维度！！！
+		// 解决方案：将batch维度和num_head维度合并，RoPE之后再拆分
 		q = ggml_rope_inplace(ctx, q, pos_ids, head_dim, GGML_ROPE_TYPE_NEOX);
 		k = ggml_rope_inplace(ctx, k, pos_ids, head_dim, GGML_ROPE_TYPE_NEOX);
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_rope_raw");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_rope_raw");
+		q = view_tensor(ctx, q, head_dim, num_heads, batch_size, input_len);
+		k = view_tensor(ctx, k, head_dim, num_heads, batch_size, input_len);
+		// [batch, num_head, seq_len, head_dim]
+		q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 3, 1));
+		k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 3, 1));
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_rope");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_rope");
+
 		// ggml_permute 与 torch.permute 不一致
 		// ggml_permute 接受的参数为源tensor维度的对应位置
 		// torch.permute 接受的参数为目标tensor维度对应的位置
 		// ggml_permute: dst->ne[permute] = src->ne
 		// torch.permute: dst->ne = src->ne[permute]
-		q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3)); // [batch, num_head, seq_len, head_dim]
-		k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)); // [batch, num_head, seq_len, head_dim]
 		v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)); // [batch, num_head, head_dim, seq_len]
 		auto k_new = ggml_cont(ctx, k); ggml_set_name(k_new, "k_new");
 		auto v_new = ggml_cont(ctx, v); ggml_set_name(v_new, "v_new");
@@ -534,9 +546,9 @@ std::pair<
 	auto puncond = reinterpret_cast<float*>(logits_uncond.data());
 	for (int i = 0; i < parallel_size; i++)
 	{
-		memcpy(pcond, plogits, 4096 * sizeof(float));
-		memcpy(puncond, plogits + 4096, 4096 * sizeof(float));
-		plogits += 8192; pcond += 4096; puncond += 4096;
+		memcpy(pcond, plogits, 16384 * sizeof(float));
+		memcpy(puncond, plogits + 16384, 16384 * sizeof(float));
+		plogits += 32768; pcond += 16384; puncond += 16384;
 	}
 	return { logits_cond, logits_uncond };
 }

@@ -92,58 +92,52 @@ std::vector<cv::Mat> generate(
 	std::vector<int> input_ids;
 	// Pre-fill
 	{
+		std::cout << "Token     0";
 		auto result = model->run_model(embeddings, num_imgs, input_len);
 		auto [logits_cond, logits_uncond] =
 			model->GenHead(result, num_imgs, input_len);
 		input_ids = model->sample_once(
 			logits_cond, logits_uncond, num_imgs, temperature, cfg_weight);
 		generated_tokens.append_range(input_ids);
+		std::cout << std::setw(8) << input_ids[0] << std::endl;
 	}
 	ModelTimer::GetInstance().ClearAll();
 	for (auto token_num : std::views::iota(1, num_patchs))
 	{
-		std::cout << "Token " << token_num << std::endl;
+		std::cout << "Token " << std::setw(5) << token_num;
 		auto embeddings = model->gen_head_align(input_ids, num_imgs);
 		auto result = model->run_model(embeddings, num_imgs, 1);
 		auto [logits_cond, logits_uncond] = model->GenHead(result, num_imgs, 1);
 		input_ids = model->sample_once(
 			logits_cond, logits_uncond, num_imgs, temperature, cfg_weight);
 		generated_tokens.append_range(input_ids);
+		std::cout << std::setw(8) << input_ids[0] << std::endl;
 		ModelTimer::GetInstance().ClearAll();
 	}
 
 	return decode_images(generated_tokens, num_imgs, img_size);
 }
 
+void test()
+{
+	auto language_model = std::make_shared<LanguageModel>(true, 30, num_threads);
+	std::vector<int> input{
+		100000, 5726, 25, 207, 1615,
+		29834, 66515, 8781, 18640, 612,
+		8143, 29445, 62913, 398, 185,
+		185, 77398, 25, 100016
+	};
+	auto embeddings = language_model->preprocess(input, 1, 576);
+	// reinterpret_cast<float*>(embeddings.data())[0] = std::nanf("");
+	auto result = language_model->run_model(embeddings, 1, 19);
+	dump_data_retry(result, "inspect/model.bin");
+}
+
 int main(int argc, char** argv)
 {
 	{
-		auto model = new LanguageModel(true, 30);
-		std::vector<int> input{
-			100000, 5726, 25, 207, 1615,
-			29834, 66515, 8781, 18640, 612,
-			8143, 29445, 62913, 398, 185,
-			185, 77398, 25, 100016
-		};
-		auto embeddings = model->preprocess(input, 1, 576);
-		dump_data_retry(embeddings, "inspect/inputs_embeddings.bin");
-		auto result = model->run_model(embeddings, 1, 19, true);
-		std::cout << "Writing result to file\n";
-		dump_data_retry(result, "inspect/model.bin");
-		auto [logits_cond, logits_uncond] =
-			model->GenHead(result, 1, 19);
-		dump_data_retry(logits_cond, "inspect/logits_cond.bin");
-		dump_data_retry(logits_uncond, "inspect/logits_uncond.bin");
-		auto input_ids = model->sample_once(
-			logits_cond, logits_uncond, 1, 1, 5);
-		for (auto id : input_ids)
-			std::cout << id << ' ';
-		std::endl(std::cout);
-		return 0;
-	}
-	{
 		constexpr size_t num_imgs = 1;
-		constexpr size_t img_sz = 128;
+		constexpr size_t img_sz = 384;
 		constexpr size_t num_patchs = img_sz * img_sz / 256;
 		auto language_model = std::make_shared<LanguageModel>(true, 30, num_threads);
 		std::vector<int> input{
@@ -157,6 +151,82 @@ int main(int argc, char** argv)
 		auto img = generate(embeddings, language_model, 1, num_imgs, img_sz, 5);
 		cv::imwrite("inspect/out.png", img[0]);
 		return 0;
+	}
+	// test(); return -1;
+	{
+		auto model = new LanguageModel(true, 30);
+		std::vector<int> input{
+			100000, 5726, 25, 207, 1615,
+			29834, 66515, 8781, 18640, 612,
+			8143, 29445, 62913, 398, 185,
+			185, 77398, 25, 100016
+		};
+		auto embeddings = model->preprocess(input, 1, 576);
+		dump_data_retry(embeddings, "inspect/inputs_embeddings.bin");
+
+		auto result = model->run_model(embeddings, 1, 19);
+		dump_data_retry(result, "inspect/model.bin");
+		//auto bcuda = ggml_backend_cuda_init(0);
+		//auto bcpu = ggml_backend_cpu_init();
+		//ggml_backend_cpu_set_n_threads(bcpu, num_threads);
+		//LlamaDecoderLayer layer{ 0, nullptr };
+		//LlamaDecoderLayer gpu_layer{ -1, bcuda };
+		//LlamaDecoderLayer cpu_layer{ -1, bcpu };
+		//layer.FillTo(gpu_layer);
+		//layer.FillTo(cpu_layer);
+		//auto acuda = ggml_gallocr_new(ggml_backend_get_default_buffer_type(bcuda));
+		//auto acpu = ggml_gallocr_new(ggml_backend_get_default_buffer_type(bcpu));
+		//std::vector<uint8_t> result;
+
+		//layer.ClearCache();
+		//result = gpu_layer.run_layer(embeddings, acuda, 2, 19, true);
+		//dump_data_retry(result, "inspect/layer-0-cuda.bin");
+
+		//layer.ClearCache();
+		//embeddings.erase(embeddings.begin(), embeddings.begin() + embeddings.size() / 2);
+		//MidTensors::GetInstance().SetPathPrefix("cor-");
+		//result = cpu_layer.run_layer(embeddings, acpu, 2, 19, true);
+		//dump_data_retry(result, "inspect/layer-0-cpu.bin");
+
+		auto [logits_cond, logits_uncond] =
+			model->GenHead(result, 1, 19);
+		dump_data_retry(logits_cond, "inspect/logits_cond.bin");
+		dump_data_retry(logits_uncond, "inspect/logits_uncond.bin");
+		auto input_ids = model->sample_once(
+			logits_cond, logits_uncond, 1, 1, 5);
+		for (auto id : input_ids)
+			std::cout << id << ' ';
+		std::endl(std::cout);
+		return 0;
+	}
+	{
+		ggml_context* ctx = ggml_init({
+			.mem_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE +
+			ggml_graph_overhead(),
+			.no_alloc = true
+			});
+		auto gr = ggml_new_graph(ctx);
+		auto cuda = ggml_backend_cuda_init(0);
+		auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda));
+		auto x = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 3, 2, 3);
+		auto A = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, 3, 2);
+		ggml_backend_alloc_ctx_tensors(ctx, cuda);
+		auto y = ggml_mul_mat(ctx, A, x);
+		ggml_build_forward_expand(gr, y);
+		ggml_gallocr_reserve(ga, gr);
+		ggml_gallocr_alloc_graph(ga, gr);
+		auto x_gen = std::views::iota(0, 18);
+		std::vector<float> x_data(x_gen.begin(), x_gen.end());
+		ggml_backend_tensor_set(x, x_data.data(), 0, x_data.size() * 4);
+		auto A_data = std::vector<float>{ 1, 0, 0, 0, 1, 0 };
+		ggml_backend_tensor_set(A, A_data.data(), 0, A_data.size() * 4);
+		ggml_backend_graph_compute(cuda, gr);
+		std::vector<float> result(12);
+		ggml_backend_tensor_get(y, result.data(), 0, result.size() * 4);
+		for (auto i : result)
+			std::cout << i << ' ';
+		std::endl(std::cout);
+		return -1;
 	}
 	{
 		int input_length = 2;
