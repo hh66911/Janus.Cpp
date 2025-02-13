@@ -95,5 +95,8 @@
     <ClInclude Include="vq_model.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="temp.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

@@ -163,6 +163,7 @@
     <ClInclude Include="ggml\include\gguf.h" />
     <ClInclude Include="language_model.h" />
     <ClInclude Include="quant.h" />
+    <ClInclude Include="temp.h" />
     <ClInclude Include="tensor_utils.h" />
     <ClInclude Include="timer.h" />
     <ClInclude Include="vq_model.h" />

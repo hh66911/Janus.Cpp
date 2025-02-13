@@ -67,11 +67,12 @@ std::vector<cv::Mat> decode_images(
 		{
 			auto idx = i * img_sz + j;
 			img_mat.at<cv::Vec3b>(i, j) = cv::Vec3b(
-				(uint8_t)float_span[channel_offset * 2 + idx],
+				(uint8_t)float_span[channel_offset * 0 + idx],
 				(uint8_t)float_span[channel_offset * 1 + idx],
-				(uint8_t)float_span[channel_offset * 0 + idx]);
+				(uint8_t)float_span[channel_offset * 2 + idx]);
 		}
 	}
+	cv::cvtColor(img_mat, img_mat, cv::COLOR_RGB2BGR);
 	imgs.push_back(img_mat);
 	return imgs;
 }

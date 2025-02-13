@@ -625,7 +625,7 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 {
 	gen_head_backend = container;
 	ggml_init_params gen_head_param = {
-		.mem_size = ggml_tensor_overhead() * 5,
+		.mem_size = ggml_tensor_overhead() * 7,
 		.mem_buffer = nullptr,
 		.no_alloc = true
 	};
@@ -636,6 +636,8 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 	vision_head = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 4096u, 16384u);
 	mlp_p1 = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 8ull, 4096ull);
 	mlp_p2 = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 4096ull, 4096ull);
+	mlp_p1_bias = ggml_new_tensor_1d(gen_head_ctx, GGML_TYPE_F32, 4096ull);
+	mlp_p2_bias = ggml_new_tensor_1d(gen_head_ctx, GGML_TYPE_F32, 4096ull);
 	align_embeddings = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 8ull, 16384ull);
 	ggml_backend_alloc_ctx_tensors(gen_head_ctx, container);
 	auto buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\output_mlp_projector.bin)");
@@ -646,6 +648,10 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 	ggml_backend_tensor_set(mlp_p1, buffer.data(), 0, buffer.size());
 	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2.bin)");
 	ggml_backend_tensor_set(mlp_p2, buffer.data(), 0, buffer.size());
+	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p1_bias.bin)");
+	ggml_backend_tensor_set(mlp_p1_bias, buffer.data(), 0, buffer.size());
+	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2_bias.bin)");
+	ggml_backend_tensor_set(mlp_p2_bias, buffer.data(), 0, buffer.size());
 	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\align_embeddings.bin)");
 	ggml_backend_tensor_set(align_embeddings, buffer.data(), 0, buffer.size());
 }
@@ -696,8 +702,10 @@ std::vector<uint8_t> LanguageModel::GenHead::embedding_mlp(
 	auto ids = ggml_new_tensor_1d(ctx, GGML_TYPE_I32, parallel_size * 2);
 	auto embs = ggml_get_rows(ctx, align_embeddings, ids);
 	embs = ggml_mul_mat(ctx, mlp_p1, embs);
+	embs = ggml_add_inplace(ctx, embs, mlp_p1_bias);
 	embs = ggml_gelu_inplace(ctx, embs);
 	embs = ggml_mul_mat(ctx, mlp_p2, embs);
+	embs = ggml_add_inplace(ctx, embs, mlp_p2_bias);
 	ggml_build_forward_expand(gr, embs);
 
 	ggml_gallocr_reserve(ga, gr);

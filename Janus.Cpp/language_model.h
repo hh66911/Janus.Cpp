@@ -196,6 +196,8 @@ private:
 		ggml_tensor* vision_head = nullptr;
 		ggml_tensor* mlp_p1 = nullptr;
 		ggml_tensor* mlp_p2 = nullptr;
+		ggml_tensor* mlp_p1_bias = nullptr;
+		ggml_tensor* mlp_p2_bias = nullptr;
 		ggml_tensor* align_embeddings = nullptr;
 	} gen_head;
 };
