@@ -5,6 +5,20 @@
 #include <iostream>
 #include <vector>
 #include <ranges>
+#include <fstream>
+
+inline void dump_data_retry(std::vector<uint8_t>& data, std::string name)
+{
+	std::ofstream ofs(name, std::ios::binary);
+	while (!ofs.good())
+	{
+		std::cerr << "Failed to open file: " << name << std::endl;
+		std::cout << "Press Enter to retry" << std::endl;
+		std::cin.get();
+		ofs.open(name, std::ios::binary);
+	}
+	ofs.write(reinterpret_cast<char*>(data.data()), data.size());
+}
 
 inline ggml_tensor* swish(ggml_context* ctx, ggml_tensor* x) {
 	auto x_sig = ggml_sigmoid(ctx, x);
@@ -95,6 +109,7 @@ public:
 		ggml_context* ctx;
 		ggml_cgraph* graph;
 	};
+	std::string path_prefix = "";
 
 private:
 	inline auto GetTensors() {
@@ -142,15 +157,20 @@ public:
 
 	inline void StartRegisterMidTensors() {
 		enable_register = true;
-		ClearMidTensors();
+		ClearMidTensors(false);
 	}
 
 	inline void StopRegisterMidTensors() {
 		enable_register = false;
 	}
 
-	inline void ClearMidTensors() {
+	inline void ClearMidTensors(bool reset_prefix = true) {
 		mid_tensors.clear();
+		if (reset_prefix) path_prefix.clear();
+	}
+
+	inline void SetPathPrefix(const std::string& prefix) {
+		path_prefix = prefix;
 	}
 
 	void SaveMidTensors(const std::string& path);

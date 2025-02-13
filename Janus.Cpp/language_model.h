@@ -43,6 +43,7 @@ public:
 	constexpr static size_t head_dim = 128;
 	constexpr static size_t num_key_value_heads = 32;
 	const int layer_idx = -1;
+	constexpr static size_t max_cached_length = 1024;
 private:
 	std::vector<uint8_t> graph_buffer;
 	ggml_context* layer_ctx = nullptr;
@@ -56,6 +57,12 @@ public:
 
 	~LlamaDecoderLayer() {
 		ggml_free(layer_ctx);
+	}
+
+	void ClearCache() {
+		cached_length = 0;
+		cached_k->clear();
+		cached_v->clear();
 	}
 
 	void FillTo(LlamaDecoderLayer& layer, bool async = false);
@@ -74,7 +81,7 @@ public:
 	);
 
 	std::vector<uint8_t> run_layer(
-		std::vector<uint8_t>& input_embs_data,
+		const std::vector<uint8_t>& input_embs_data,
 		ggml_gallocr* layer_galloc,
 		size_t batch_size,
 		size_t input_len,
@@ -110,6 +117,7 @@ private:
 	ggml_context* model_ctx = nullptr;
 	ggml_backend* cuda_backend = nullptr;
 	ggml_backend* cpu_backend = nullptr;
+	ggml_gallocr* cuda_ga = nullptr;
 	const size_t gpu_offload_num;
 	const int num_cpu_threads;
 public:
@@ -120,6 +128,7 @@ public:
 	);
 	~LanguageModel() {
 		ggml_free(model_ctx);
+		ggml_gallocr_free(cuda_ga);
 		ggml_backend_free(cuda_backend);
 		ggml_backend_free(cpu_backend);
 	}
@@ -139,7 +148,8 @@ public:
 	std::vector<uint8_t> run_model(
 		std::vector<uint8_t> input_embs_data,
 		size_t parallel_size,
-		size_t input_len
+		size_t input_len,
+		bool dump_data = false
 	);
 
 	std::pair<
@@ -162,14 +172,16 @@ public:
 private:
 	ggml_tensor* input_embeddings = nullptr;
 	ggml_tensor* output_rms_norm = nullptr;
-	std::vector<LlamaDecoderLayer> layers;
+	std::vector<std::unique_ptr<LlamaDecoderLayer>> layers;
 	std::vector<LlamaDecoderLayer> offloads;
 	struct GenHead
 	{
 		ggml_context* gen_head_ctx = nullptr;
-		ggml_backend* gen_head_backend;
+		ggml_backend* gen_head_backend = nullptr;
+		ggml_gallocr* ga = nullptr;
 		GenHead(ggml_backend* container);
 		~GenHead() {
+			ggml_gallocr_free(ga);
 			ggml_free(gen_head_ctx);
 		}
 		std::vector<uint8_t> run_head(

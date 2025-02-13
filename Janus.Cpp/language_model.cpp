@@ -49,11 +49,13 @@ LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 		ggml_backend_alloc_ctx_tensors(layer_ctx, backend);
 	else if (layer_idx >= 0)
 	{
-		// 从文件加载权重并量化
 		cached_k = std::make_shared<std::vector<uint8_t>>();
 		cached_v = std::make_shared<std::vector<uint8_t>>();
-		LoadFromFile("model-file/layer_" + std::to_string(layer_idx) + ".bin");
+		LoadFromFile(
+			R"(C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\model-file\layer_)"
+			+ std::to_string(layer_idx) + ".bin");
 		return;
+		// 从文件加载权重并量化
 		F32TensorFromFile(layer_ctx, norm_weight,
 			GetWeightFileName(layer_idx, "post_attention_layernorm"));
 		F32TensorFromFile(layer_ctx, input_norm_weight,
@@ -154,6 +156,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 	auto ctx = ggml_init(builder_params);
 
 	auto layer_graph = ggml_new_graph(ctx);
+
 	auto input_emb = ggml_new_tensor_3d(ctx, GGML_TYPE_F32, 4096u, input_len, batch_size);
 	ggml_set_name(input_emb, "input_emb");
 
@@ -162,7 +165,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 
 	ggml_tensor* output = nullptr;
 	{
-		// 层归一化
+		// 层归一化 Shape: [batch, seq_len, 4096]
 		auto rms_normed_input = ggml_rms_norm(ctx, input_emb, eps);
 		rms_normed_input = ggml_mul_inplace(ctx, rms_normed_input, input_norm_weight);
 
@@ -185,12 +188,9 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		// torch.permute 接受的参数为目标tensor维度对应的位置
 		// ggml_permute: dst->ne[permute] = src->ne
 		// torch.permute: dst->ne = src->ne[permute]
-		q = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3)),
-			head_dim, input_len, num_heads, batch_size);
-		k = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)),
-			head_dim, input_len, num_heads, batch_size);
-		v = view_tensor(ctx, ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)),
-			input_len, head_dim, num_heads, batch_size);
+		q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3)); // [batch, num_head, seq_len, head_dim]
+		k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3)); // [batch, num_head, seq_len, head_dim]
+		v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)); // [batch, num_head, head_dim, seq_len]
 		auto k_new = ggml_cont(ctx, k); ggml_set_name(k_new, "k_new");
 		auto v_new = ggml_cont(ctx, v); ggml_set_name(v_new, "v_new");
 		ggml_build_forward_expand(layer_graph, k_new);
@@ -208,19 +208,34 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 
 			k = ggml_concat(ctx, past_k, k, 1);
 			v = ggml_concat(ctx, past_v, v, 0);
+
+			// 用于防止重复分配内存
+			auto qk_buffer = ggml_new_tensor_4d(ctx, q->type,
+				head_dim, num_heads, max_cached_length - cached_length, batch_size * 2);
+			ggml_build_forward_expand(layer_graph, qk_buffer);
+			auto attn_buffer = ggml_new_tensor_4d(ctx, q->type,
+				max_cached_length - cached_length,
+				max_cached_length - cached_length,
+				num_heads, batch_size * 2);
+			ggml_build_forward_expand(layer_graph, attn_buffer);
 		}
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_cat");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat");
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_cur");
 
 		// 用法提示：ggml_mul_mat(ctx, a, b) => b * a^T
 		// 返回的张量形状为 [ne3, ne2, b->ne[1], a->ne[1]]
 		// 特此记录，以免忘记
 		// Shape: [batch, num_head * head_dim, seq_len, seq_len]
 		ggml_tensor* QK = ggml_mul_mat(ctx, k, q); // QK = Q * K^T
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, QK, "QK");
 		// QK_scaled = QK / sqrt(dim)
 		ggml_tensor* QK_scaled = ggml_scale_inplace(ctx, QK,
 			1.0f / float(sqrt(head_dim)));
 		// QK_masked = mask_past(QK_scaled)
 		ggml_tensor* QK_masked = ggml_diag_mask_inf_inplace(
 			ctx, QK_scaled, cached_length);
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, QK_masked, "QK_masked");
 		// QK = soft_max(QK_masked)
 		ggml_tensor* QK_soft_max = ggml_soft_max_inplace(ctx, QK_masked);
 		// attn_output = QK * V^T | Shape: [batch, num_head, seq_len, head_dim]
@@ -230,6 +245,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		attn_output = view_tensor(ctx, ggml_cont(ctx, attn_output),
 			head_dim * num_heads, input_len, batch_size);
 		attn_output = ggml_mul_mat(ctx, o_proj, attn_output);
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, attn_output, "o_proj");
 		auto residual = ggml_add_inplace(ctx,
 			flatten_tensor(ctx, attn_output), flatten_tensor(ctx, input_emb));
 		residual = view_tensor(ctx, residual, 4096u, input_len, batch_size);
@@ -250,6 +266,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 
 		output = ggml_add_inplace(ctx,
 			flatten_tensor(ctx, down), flatten_tensor(ctx, residual));
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, output, "output");
 	}
 	ggml_build_forward_expand(layer_graph, output);
 	ggml_free(ctx);
@@ -257,14 +274,13 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 }
 
 std::vector<uint8_t> LlamaDecoderLayer::run_layer(
-	std::vector<uint8_t>& input_embs_data,
+	const std::vector<uint8_t>& input_embs_data,
 	ggml_gallocr* layer_galloc,
 	size_t batch_size, size_t input_len,
 	bool save_details
 ) {
 	if (input_embs_data.size() != 4096 * input_len * batch_size * 4)
 		throw std::runtime_error("Input size mismatch");
-
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Layer);
 
 
@@ -284,7 +300,8 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 	ggml_backend_tensor_set(input_embs_tensor, input_embs_data.data(), 0, input_embs_data.size());
 	auto pos_ids = ggml_graph_get_tensor(gr, "pos_ids");
 
-	auto pos_ids_generator = std::views::iota(0, int32_t(input_len));
+	auto pos_ids_generator = std::views::iota(
+		cached_length, cached_length + int(input_len));
 	std::vector<int> pos_ids_data(input_len);
 	std::copy(pos_ids_generator.begin(), pos_ids_generator.end(), pos_ids_data.begin());
 	ggml_backend_tensor_set(pos_ids, pos_ids_data.data(), 0, ggml_nbytes(pos_ids));
@@ -342,23 +359,8 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 			"inspect/" + backend_name + "/layer_" + std::to_string(layer_idx) + ".dot"
 			).c_str());
 
-		auto mid_tensors = MidTensors::GetInstance().get_mid_tensors(gr);
-		for (auto tensor : mid_tensors)
-		{
-			auto file_name = "inspect/" + backend_name + "/" +
-				std::string(tensor->name) + ".bin";
-			std::ofstream ofs(file_name, std::ios::binary);
-			while (!ofs.good())
-			{
-				std::cerr << "无法打开文件：" << file_name << std::endl;
-				std::cout << "回车以重试" << std::endl;
-				std::cin.get();
-				ofs.open(file_name, std::ios::binary);
-			}
-			std::vector<char> data(ggml_nbytes(tensor));
-			ggml_backend_tensor_get(tensor, data.data(), 0, data.size());
-			ofs.write(data.data(), data.size());
-		}
+		MidTensors::GetInstance().SaveMidTensors(
+			"inspect/" + backend_name + "/layer_" + std::to_string(layer_idx) + "/");
 	}
 
 	return result;
@@ -383,6 +385,8 @@ LanguageModel::LanguageModel(
 	};
 	model_ctx = ggml_init(model_params);
 
+	cuda_ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda_backend));
+
 	// 从文件加载
 	input_embeddings = ggml_new_tensor_2d(
 		model_ctx, GGML_TYPE_F16, 4096u, 102400u);
@@ -394,15 +398,16 @@ LanguageModel::LanguageModel(
 
 	if (!load_layers)
 		return;
-	layers.reserve(30);
-	for (auto i : std::views::iota(0, 30))
-		layers.emplace_back(i);
+	layers.resize(30);
+#pragma omp parallel for
+	for (int i = 0; i < 30; i++)
+		layers[i] = std::make_unique<LlamaDecoderLayer>(i, nullptr);
 
 	offloads.reserve(gpu_offload_num);
 	for (auto i : std::views::iota(0ull, gpu_offload_num))
 	{
 		offloads.emplace_back(-1, cuda_backend);
-		layers[i].FillTo(offloads[i]);
+		layers[i]->FillTo(offloads[i]);
 	}
 }
 
@@ -477,9 +482,11 @@ std::vector<uint8_t> LanguageModel::postprocess(
 }
 
 std::vector<uint8_t> LanguageModel::run_model(
-	std::vector<uint8_t> input_embs_data, size_t parallel_size, size_t input_len
+	std::vector<uint8_t> input_embs_data,
+	size_t parallel_size,
+	size_t input_len,
+	bool dump_data
 ) {
-	auto cuda_ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda_backend));
 	if (input_embs_data.size() != parallel_size * 2 * input_len * 4096ull * 4)
 		throw std::runtime_error("Input embeddings size mismatch");
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Model);
@@ -489,18 +496,17 @@ std::vector<uint8_t> LanguageModel::run_model(
 		auto& layer = offloads[i];
 		input_embs_data = layer.run_layer(
 			input_embs_data, cuda_ga, parallel_size * 2, input_len);
-		std::ofstream ofs("inspect/model/layer_" + std::to_string(i) + ".bin", std::ios::binary);
-		ofs.write(reinterpret_cast<const char*>(input_embs_data.data()), input_embs_data.size());
+		if (dump_data)
+			dump_data_retry(input_embs_data, "inspect/model/layer_" + std::to_string(i) + ".bin");
 	}
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::Model);
 	// ModelTimer::GetInstance().PrintTimeConsumedAll();
 	auto mem_size = ggml_gallocr_get_buffer_size(cuda_ga, 0);
 	// std::cout << "CUDA Graph Memory Usage: " << mem_size << " bytes" << std::endl;
-	ggml_gallocr_free(cuda_ga);
 
 	input_embs_data = postprocess(input_embs_data, parallel_size, input_len);
-	std::ofstream ofs("inspect/model/postprocess.bin", std::ios::binary);
-	ofs.write(reinterpret_cast<const char*>(input_embs_data.data()), input_embs_data.size());
+	if (dump_data)
+		dump_data_retry(input_embs_data, "inspect/model/postprocess.bin");
 
 	return input_embs_data;
 }
@@ -510,23 +516,27 @@ std::pair<
 > LanguageModel::GenHead(
 	std::vector<uint8_t> outputs, size_t parallel_size, size_t input_len)
 {
-	if (outputs.size() > 4096ull * parallel_size * 2) {
+	if (outputs.size() != parallel_size * 2 * 4096ull * input_len * 4)
+		throw std::runtime_error("Output size mismatch");
+
+	if (input_len > 1) {
+		constexpr size_t N_offset = 4096ull * 4;
+		const size_t B_offset = input_len * N_offset;
 		// 取最后一个 token 的输出
-		outputs.erase(outputs.begin(),
-			outputs.end() - 4096ull * parallel_size * 2 * sizeof(float));
+		outputs.erase(outputs.begin(), outputs.end() - B_offset - N_offset);
+		outputs.erase(outputs.begin() + N_offset, outputs.end() - N_offset);
 	}
 	auto logits = gen_head.run_head(outputs, parallel_size);
 	std::vector<uint8_t> logits_cond(logits.size() / 2);
 	std::vector<uint8_t> logits_uncond(logits.size() / 2);
-#pragma omp parallel for
+	auto plogits = reinterpret_cast<float*>(logits.data());
+	auto pcond = reinterpret_cast<float*>(logits_cond.data());
+	auto puncond = reinterpret_cast<float*>(logits_uncond.data());
 	for (int i = 0; i < parallel_size; i++)
 	{
-		std::copy(logits.begin() + i * 16384ull * 2,
-			logits.begin() + (i * 2 + 1) * 16384ull,
-			logits_cond.begin() + i * 16384ull);
-		std::copy(logits.begin() + (i * 2 + 1) * 16384ull,
-			logits.begin() + (i + 1) * 16384ull * 2,
-			logits_uncond.begin() + i * 16384ull);
+		memcpy(pcond, plogits, 4096 * sizeof(float));
+		memcpy(puncond, plogits + 4096, 4096 * sizeof(float));
+		plogits += 8192; pcond += 4096; puncond += 4096;
 	}
 	return { logits_cond, logits_uncond };
 }
@@ -608,6 +618,8 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 		.no_alloc = true
 	};
 	gen_head_ctx = ggml_init(gen_head_param);
+	ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(gen_head_backend));
+
 	output_mlp_projector = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 4096u, 4096u);
 	vision_head = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 4096u, 16384u);
 	mlp_p1 = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 8ull, 4096ull);
@@ -629,7 +641,6 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 std::vector<uint8_t> LanguageModel::GenHead::run_head(
 	std::vector<uint8_t> hidden_states_data, size_t parallel_size)
 {
-	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(gen_head_backend));
 	ggml_init_params gen_head_param = {
 		.mem_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE
 				  + ggml_graph_overhead(),
@@ -656,14 +667,12 @@ std::vector<uint8_t> LanguageModel::GenHead::run_head(
 	std::vector<uint8_t> result(ggml_nbytes(x));
 	ggml_backend_tensor_get(x, result.data(), 0, result.size());
 	ggml_free(ctx);
-	ggml_gallocr_free(ga);
 	return result;
 }
 
 std::vector<uint8_t> LanguageModel::GenHead::embedding_mlp(
 	std::vector<int> tokens, size_t parallel_size
 ) {
-	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(gen_head_backend));
 	ggml_init_params gen_head_param = {
 		.mem_size = ggml_tensor_overhead() * GGML_DEFAULT_GRAPH_SIZE
 				  + ggml_graph_overhead(),
@@ -690,6 +699,5 @@ std::vector<uint8_t> LanguageModel::GenHead::embedding_mlp(
 	std::vector<uint8_t> result(ggml_nbytes(embs));
 	ggml_backend_tensor_get(embs, result.data(), 0, result.size());
 	ggml_free(ctx);
-	ggml_gallocr_free(ga);
 	return result;
 }

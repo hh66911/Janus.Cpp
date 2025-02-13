@@ -51,9 +51,11 @@ void MidTensors::inspect_tensor(
 
 void MidTensors::SaveMidTensors(const std::string& path)
 {
+	std::stringstream oss;
 	for (auto tensor : GetTensors())
 	{
-		auto file_name = path / std::filesystem::path(std::string(tensor->name) + ".bin");
+		auto file_name = path / std::filesystem::path(
+			path_prefix + std::string(tensor->name) + ".bin");
 		std::ofstream ofs(file_name, std::ios::binary);
 		while (!ofs.good())
 		{
@@ -65,5 +67,12 @@ void MidTensors::SaveMidTensors(const std::string& path)
 		std::vector<char> data(ggml_nbytes(tensor));
 		ggml_backend_tensor_get(tensor, data.data(), 0, data.size());
 		ofs.write(data.data(), data.size());
+
+		oss << std::setw(20) << tensor->name << "    ";
+		oss << "Shape: [" << tensor->ne[3] << ", " << tensor->ne[2] << ", ";
+		oss << tensor->ne[1] << ", " << tensor->ne[0] << "]" << std::endl;
 	}
+	std::ofstream shapes(path / std::filesystem::path(
+		path_prefix + "shapes.txt"));
+	shapes << oss.str();
 }
