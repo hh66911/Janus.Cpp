@@ -203,10 +203,6 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		// ggml_permute: dst->ne[permute] = src->ne
 		// torch.permute: dst->ne = src->ne[permute]
 		v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)); // [batch, num_head, head_dim, seq_len]
-		auto k_new = ggml_cont(ctx, k); ggml_set_name(k_new, "k_new");
-		auto v_new = ggml_cont(ctx, v); ggml_set_name(v_new, "v_new");
-		ggml_build_forward_expand(layer_graph, k_new);
-		ggml_build_forward_expand(layer_graph, v_new);
 
 		// Á¬½Ó Cached K, V
 		if (cached_length > 0)
@@ -231,6 +227,13 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 				num_heads, batch_size * 2);
 			ggml_build_forward_expand(layer_graph, attn_buffer);
 		}
+		auto k_cache_new = ggml_cont(ctx, k);
+		ggml_set_name(k_cache_new, "k_cache_new");
+		auto v_cache_new = ggml_cont(ctx, v);
+		ggml_set_name(v_cache_new, "v_cache_new");
+		ggml_build_forward_expand(layer_graph, k_cache_new);
+		ggml_build_forward_expand(layer_graph, v_cache_new);
+
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_cat");
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat");
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_cur");
@@ -340,8 +343,8 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 	std::vector<uint8_t> result(ggml_nbytes(output));
 	ggml_backend_tensor_get(output, result.data(), 0, result.size());
 
-	auto k = ggml_graph_get_tensor(gr, "k_new");
-	auto v = ggml_graph_get_tensor(gr, "v_new");
+	auto k = ggml_graph_get_tensor(gr, "k_cache_new");
+	auto v = ggml_graph_get_tensor(gr, "v_cache_new");
 	auto total_size = ggml_nbytes(k);
 	cached_k->resize(total_size);
 	cached_v->resize(total_size);
