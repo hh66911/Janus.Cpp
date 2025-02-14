@@ -143,6 +143,7 @@
     <ClCompile Include="language_model.cpp" />
     <ClCompile Include="quant.cpp" />
     <ClCompile Include="tensor_utils.cpp" />
+    <ClCompile Include="vq_model.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml-alloc.h" />
@@ -163,7 +164,6 @@
     <ClInclude Include="ggml\include\gguf.h" />
     <ClInclude Include="language_model.h" />
     <ClInclude Include="quant.h" />
-    <ClInclude Include="temp.h" />
     <ClInclude Include="tensor_utils.h" />
     <ClInclude Include="timer.h" />
     <ClInclude Include="vq_model.h" />

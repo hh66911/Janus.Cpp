@@ -123,3 +123,29 @@ std::vector<uint8_t> contact_embeddings(
 	}
 	return result;
 }
+
+void print_tensor_2d(const ggml_tensor* tensor)
+{
+	if (tensor->type == GGML_TYPE_I32)
+	{
+		for (auto i : std::views::iota(0, tensor->ne[1]))
+		{
+			for (auto j : std::views::iota(0, tensor->ne[0]))
+				std::cout << static_cast<int*>(tensor->data)[i * tensor->ne[1] + j] << " ";
+			std::cout << std::endl;
+		}
+	}
+	else if (tensor->type == GGML_TYPE_F32)
+	{
+		for (auto i : std::views::iota(0, tensor->ne[1]))
+		{
+			for (auto j : std::views::iota(0, tensor->ne[0]))
+				std::cout << static_cast<float*>(tensor->data)[i * tensor->ne[1] + j] << " ";
+			std::cout << std::endl;
+		}
+	}
+	else
+	{
+		std::cout << "Unsupported type\n";
+	}
+}

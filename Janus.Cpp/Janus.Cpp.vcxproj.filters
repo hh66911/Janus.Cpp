@@ -30,6 +30,9 @@
     <ClCompile Include="tensor_utils.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="vq_model.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml.h">
@@ -93,9 +96,6 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="vq_model.h">
-      <Filter>头文件</Filter>
-    </ClInclude>
-    <ClInclude Include="temp.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

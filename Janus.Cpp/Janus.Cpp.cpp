@@ -42,37 +42,47 @@ constexpr int num_threads = 1;
 #include "timer.h"
 
 std::vector<cv::Mat> decode_images(
-	std::vector<int> token_ids, size_t num_imgs, size_t img_sz)
+	std::vector<int> batch_token_ids, size_t num_imgs, size_t img_sz)
 {
 	// auto backend = ggml_backend_cuda_init(0);
 	auto backend = ggml_backend_cpu_init();
 	ggml_backend_cpu_set_n_threads(backend, 16);
 	GenDecoder decoder{ backend };
 	const size_t num_patchs_w = img_sz / 16;
-	auto img = decoder.decode_img_tokens(token_ids, num_imgs, num_patchs_w);
-	ggml_backend_free(backend);
+	const size_t num_tokens_per_img = num_patchs_w * num_patchs_w;
 
 	std::vector<cv::Mat> imgs;
-	cv::Mat img_mat(int(img_sz), int(img_sz), CV_8UC3);
-	auto float_span = std::span(reinterpret_cast<float*>(img.data()), img_sz * img_sz);
-	for (auto& f : float_span)
-		f = float(std::clamp((f + 1.) / 2 * 255, 0., 255.));
-	const size_t channel_offset = img_sz * img_sz;
-	if (img_sz > std::numeric_limits<int>::max())
-		throw std::runtime_error("Img too BIG !!!");
-#pragma omp parallel for
-	for (int i = 0; i < int(img_sz); i++)
+	for (auto i : std::views::iota(0ull, num_imgs))
 	{
-		for (int j = 0; j < int(img_sz); j++)
+		std::vector<int> token_ids(
+			batch_token_ids.begin() + i * num_tokens_per_img,
+			batch_token_ids.begin() + (i + 1) * num_tokens_per_img);
+		auto img = decoder.decode_img_tokens(token_ids, num_imgs, num_patchs_w);
+		cv::Mat img_mat(int(img_sz), int(img_sz), CV_8UC3);
+		auto float_span = std::span(
+			reinterpret_cast<float*>(img.data()),
+			img_sz * img_sz * 3);
+		for (auto& f : float_span)
+			f = float(std::clamp((f + 1.) / 2 * 255, 0., 255.));
+		const size_t channel_offset = img_sz * img_sz;
+		if (img_sz > std::numeric_limits<int>::max())
+			throw std::runtime_error("Img too BIG !!!");
+#pragma omp parallel for
+		for (int i = 0; i < int(img_sz); i++)
 		{
-			auto idx = i * img_sz + j;
-			img_mat.at<cv::Vec3b>(i, j) = cv::Vec3b(
-				(uint8_t)float_span[channel_offset * 0 + idx],
-				(uint8_t)float_span[channel_offset * 1 + idx],
-				(uint8_t)float_span[channel_offset * 2 + idx]);
+			for (int j = 0; j < int(img_sz); j++)
+			{
+				auto idx = i * img_sz + j;
+				auto r = (uint8_t)float_span[channel_offset * 0 + idx];
+				auto g = (uint8_t)float_span[channel_offset * 1 + idx];
+				auto b = (uint8_t)float_span[channel_offset * 2 + idx];
+				img_mat.at<cv::Vec3b>(i, j) = cv::Vec3b(b, g, r);
+			}
 		}
+		imgs.push_back(img_mat);
 	}
-	imgs.push_back(img_mat);
+
+	ggml_backend_free(backend);
 	return imgs;
 }
 
@@ -131,7 +141,7 @@ int main(int argc, char** argv)
 		185, 77398, 25, 100016
 	};
 	auto embeddings = language_model->preprocess(input, num_imgs, num_patchs);
-	auto img = generate(embeddings, language_model, 1, num_imgs, img_sz, 5);
-	cv::imwrite("inspect/out.png", img[0]);
+	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5);
+	cv::imwrite("inspect/out1.png", imgs[0]);
 	return 0;
 }
