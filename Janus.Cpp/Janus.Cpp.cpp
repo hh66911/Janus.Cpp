@@ -118,35 +118,6 @@ std::vector<cv::Mat> generate(
 	return decode_images(generated_tokens, num_imgs, img_size);
 }
 
-LanguageModel model{ true, 30, num_threads };
-
-#include "temp.h"
-int test0()
-{
-	std::vector<int> input{
-		100000, 5726, 25, 207, 1615,
-		29834, 66515, 8781, 18640, 612,
-		8143, 29445, 62913, 398, 185,
-		185, 77398, 25, 100016
-	};
-	auto emb0 = model.preprocess(input, 1, 576);
-	std::vector<uint8_t> result;
-	result = model.run_model(emb0, 1, 19);
-	MidTensors::GetInstance().dump_data_retry(result, "inspect/gen/emb0_out.bin");
-
-	int idx = 1;
-	for (auto i : data_tokens)
-	{
-		std::cout << "Token " << std::setw(5) << idx << std::endl;
-		auto emb = model.gen_head_align({ i }, 1);
-		result = model.run_model(emb, 1, 1);
-		MidTensors::GetInstance().dump_data_retry(
-			result, "inspect/gen/emb" + std::to_string(idx) + "_out.bin");
-		idx++;
-	}
-	return -1;
-}
-
 int main(int argc, char** argv)
 {
 	constexpr size_t num_imgs = 1;
