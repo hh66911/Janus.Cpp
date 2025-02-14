@@ -50,6 +50,23 @@ void MidTensors::inspect_tensor(
 		});
 }
 
+void MidTensors::dump_data_retry(
+	std::vector<uint8_t>& data, std::filesystem::path path)
+{
+	auto filename = path.filename().string();
+	auto path_folder = path.parent_path();
+	auto new_path = path_folder / (path_prefix + filename);
+	std::ofstream ofs(new_path, std::ios::binary);
+	while (!ofs.good())
+	{
+		std::cerr << "Failed to open file: " << new_path << std::endl;
+		std::cout << "Press Enter to retry" << std::endl;
+		std::cin.get();
+		ofs.open(new_path, std::ios::binary);
+	}
+	ofs.write(reinterpret_cast<char*>(data.data()), data.size());
+}
+
 void MidTensors::SaveMidTensors(const std::string& path)
 {
 	std::stringstream oss;

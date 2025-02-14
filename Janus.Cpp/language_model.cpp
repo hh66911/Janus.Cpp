@@ -342,13 +342,11 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 
 	auto k = ggml_graph_get_tensor(gr, "k_new");
 	auto v = ggml_graph_get_tensor(gr, "v_new");
-	auto offset = cached_k->size();
-	auto append_size = ggml_nbytes(k);
-	auto total_size = offset + append_size;
+	auto total_size = ggml_nbytes(k);
 	cached_k->resize(total_size);
 	cached_v->resize(total_size);
-	ggml_backend_tensor_get(k, cached_k->data() + offset, 0, append_size);
-	ggml_backend_tensor_get(v, cached_v->data() + offset, 0, append_size);
+	ggml_backend_tensor_get(k, cached_k->data(), 0, total_size);
+	ggml_backend_tensor_get(v, cached_v->data(), 0, total_size);
 
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::CopyTensor);
 
@@ -366,6 +364,13 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 			backend_name = "cuda";
 		else
 			backend_name = "unknown";
+
+		MidTensors::GetInstance().dump_data_retry(
+			*cached_k, "inspect/" + backend_name + "/layer_" +
+			std::to_string(layer_idx) + "/cached_k.bin");
+		MidTensors::GetInstance().dump_data_retry(
+			*cached_v, "inspect/" + backend_name + "/layer_" +
+			std::to_string(layer_idx) + "/cached_v.bin");
 
 		ggml_graph_dump_dot(gr, nullptr, (
 			"inspect/" + backend_name + "/layer_" + std::to_string(layer_idx) + ".dot"
@@ -509,7 +514,8 @@ std::vector<uint8_t> LanguageModel::run_model(
 		input_embs_data = layer.run_layer(
 			input_embs_data, cuda_ga, parallel_size * 2, input_len);
 		if (dump_data)
-			dump_data_retry(input_embs_data, "inspect/model/layer_" + std::to_string(i) + ".bin");
+			MidTensors::GetInstance().dump_data_retry(
+				input_embs_data, "inspect/model/layer_" + std::to_string(i) + ".bin");
 	}
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::Model);
 	// ModelTimer::GetInstance().PrintTimeConsumedAll();
@@ -518,7 +524,8 @@ std::vector<uint8_t> LanguageModel::run_model(
 
 	input_embs_data = postprocess(input_embs_data, parallel_size, input_len);
 	if (dump_data)
-		dump_data_retry(input_embs_data, "inspect/model/postprocess.bin");
+		MidTensors::GetInstance().dump_data_retry(
+			input_embs_data, "inspect/model/postprocess.bin");
 
 	return input_embs_data;
 }

@@ -11,19 +11,6 @@ std::vector<uint8_t> contact_embeddings(
 	const std::vector<uint8_t>& left, const std::vector<uint8_t>& right,
 	size_t left_len, size_t right_len, size_t batch_size);
 
-inline void dump_data_retry(std::vector<uint8_t>& data, std::string name)
-{
-	std::ofstream ofs(name, std::ios::binary);
-	while (!ofs.good())
-	{
-		std::cerr << "Failed to open file: " << name << std::endl;
-		std::cout << "Press Enter to retry" << std::endl;
-		std::cin.get();
-		ofs.open(name, std::ios::binary);
-	}
-	ofs.write(reinterpret_cast<char*>(data.data()), data.size());
-}
-
 inline ggml_tensor* swish(ggml_context* ctx, ggml_tensor* x) {
 	auto x_sig = ggml_sigmoid(ctx, x);
 	return ggml_mul(ctx, x, x_sig);
@@ -176,6 +163,9 @@ public:
 	inline void SetPathPrefix(const std::string& prefix) {
 		path_prefix = prefix;
 	}
+
+	void dump_data_retry(
+		std::vector<uint8_t>& data, std::filesystem::path path);
 
 	void SaveMidTensors(const std::string& path);
 };

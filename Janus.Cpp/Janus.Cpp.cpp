@@ -118,39 +118,48 @@ std::vector<cv::Mat> generate(
 	return decode_images(generated_tokens, num_imgs, img_size);
 }
 
+ggml_backend* cuda;
+ggml_gallocr* ga;
+LlamaDecoderLayer layer{ 0, nullptr };
+LlamaDecoderLayer* gpulayer;
+LanguageModel model{ false, 0, num_threads };
+
 #include "temp.h"
 int test1()
 {
-	auto model = std::make_shared<LanguageModel>(true, 30, num_threads);
 	std::vector<int> input{
 		100000, 5726, 25, 207, 1615,
 		29834, 66515, 8781, 18640, 612,
 		8143, 29445, 62913, 398, 185,
 		185, 77398, 25, 100016
 	};
-	auto emb0 = model->preprocess(input, 1, 576);
-	auto emb1 = model->gen_head_align({ data_tokens[0] }, 1);
-	auto emb2 = model->gen_head_align({ data_tokens[1] }, 1);
-	emb0 = contact_embeddings(contact_embeddings(emb0, emb1, 19, 1, 2), emb2, 20, 1, 2);
 	MidTensors::GetInstance().SetPathPrefix("emb21/");
-	auto result = model->run_model(emb0, 1, 21);
-	dump_data_retry(result, "inspect/emb21_out.bin");
+	auto emb0 = model.preprocess(input, 1, 576);
+	MidTensors::GetInstance().dump_data_retry(emb0, "inspect/inputs/emb0.bin");
+	auto emb1 = model.gen_head_align({ data_tokens[0] }, 1);
+	MidTensors::GetInstance().dump_data_retry(emb1, "inspect/inputs/emb1.bin");
+	emb1 = contact_embeddings(emb0, emb1, 19, 1, 2);
+	MidTensors::GetInstance().dump_data_retry(emb1, "inspect/inputs/emb1_cat.bin");
+	auto emb2 = model.gen_head_align({ data_tokens[1] }, 1);
+	MidTensors::GetInstance().dump_data_retry(emb2, "inspect/inputs/emb2.bin");
+	emb2 = contact_embeddings(emb1, emb2, 20, 1, 2);
+	MidTensors::GetInstance().dump_data_retry(emb2, "inspect/inputs/emb2_cat.bin");
+	auto result = gpulayer->run_layer(emb2, ga, 2, 21, true);
 	return -1;
 }
 
 int test0()
 {
-	auto model = std::make_shared<LanguageModel>(true, 30, num_threads);
 	std::vector<int> input{
 		100000, 5726, 25, 207, 1615,
 		29834, 66515, 8781, 18640, 612,
 		8143, 29445, 62913, 398, 185,
 		185, 77398, 25, 100016
 	};
-	auto emb0 = model->preprocess(input, 1, 576);
+	auto emb0 = model.preprocess(input, 1, 576);
 	std::vector<uint8_t> result;
 	MidTensors::GetInstance().SetPathPrefix("emb0/");
-	result = model->run_model(emb0, 1, 19);
+	result = gpulayer->run_layer(emb0, ga, 2, 19, true);
 	// dump_data_retry(result, "inspect/gen/emb0_out.bin");
 
 	int idx = 1;
@@ -158,8 +167,8 @@ int test0()
 	{
 		if (idx == 3) break;
 		MidTensors::GetInstance().SetPathPrefix("emb" + std::to_string(idx) + "/");
-		auto emb = model->gen_head_align({ i }, 1);
-		auto result = model->run_model(emb, 1, 1);
+		auto emb = model.gen_head_align({ i }, 1);
+		result = gpulayer->run_layer(emb, ga, 2, 1, true);
 		// dump_data_retry(result, "inspect/gen/emb" + std::to_string(idx) + "_out.bin");
 		idx++;
 	}
@@ -168,8 +177,13 @@ int test0()
 
 int main(int argc, char** argv)
 {
-	test0();
-	return test1();
+	//cuda = ggml_backend_cuda_init(0);
+	//ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda));
+	//gpulayer = new LlamaDecoderLayer{ -1, cuda };
+	//layer.FillTo(*gpulayer);
+	//test0();
+	//gpulayer->ClearCache();
+	//return test1();
 	constexpr size_t num_imgs = 1;
 	constexpr size_t img_sz = 384;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
