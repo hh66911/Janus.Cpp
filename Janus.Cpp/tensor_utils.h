@@ -7,6 +7,10 @@
 #include <ranges>
 #include <fstream>
 
+std::vector<uint8_t> contact_embeddings(
+	const std::vector<uint8_t>& left, const std::vector<uint8_t>& right,
+	size_t left_len, size_t right_len, size_t batch_size);
+
 inline void dump_data_retry(std::vector<uint8_t>& data, std::string name)
 {
 	std::ofstream ofs(name, std::ios::binary);
