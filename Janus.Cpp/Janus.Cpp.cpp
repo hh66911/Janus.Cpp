@@ -11,10 +11,7 @@
 #pragma comment(lib, "ggml-blas.lib")
 #pragma comment(lib, "ggml-cuda.lib")
 
-#include "quant.h"
-
 #include <iostream>
-#include <cstdlib>
 #include <memory>
 #include <vector>
 #include <array>
@@ -22,12 +19,6 @@
 #include <ranges>
 #include <filesystem>
 #include <fstream>
-#include <chrono>
-#include <functional>
-#include <exception>
-#include <type_traits>
-#include <coroutine>
-#include <mdspan>
 #include <random>
 #include <opencv2/opencv.hpp>
 
@@ -40,6 +31,7 @@ constexpr int num_threads = 1;
 #include "vq_model.h"
 #include "language_model.h"
 #include "timer.h"
+#include "tokenizer.h"
 
 std::vector<cv::Mat> decode_images(
 	std::vector<int> batch_token_ids, size_t num_imgs, size_t img_sz)
@@ -128,13 +120,13 @@ std::vector<cv::Mat> generate(
 	return decode_images(generated_tokens, num_imgs, img_size);
 }
 
-int main(int argc, char** argv)
+int main_gen(int argc, char** argv)
 {
 	constexpr size_t num_imgs = 1;
 	constexpr size_t img_sz = 384;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
 	auto language_model = std::make_shared<LanguageModel>(true, 30, num_threads);
-	std::vector<int> input{
+	std::vector<int> input{ // 一个穿裙子的小女孩在草地上玩耍。
 		100000, 5726, 25, 207, 1615,
 		29834, 66515, 8781, 18640, 612,
 		8143, 29445, 62913, 398, 185,

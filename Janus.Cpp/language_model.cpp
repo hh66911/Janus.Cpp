@@ -610,8 +610,6 @@ std::vector<int> LanguageModel::sample_once(
 		std::sort(pos.begin(), pos.end(), [&](int a, int b) {
 			return p[a] > p[b];
 			});
-		sample_result[i] = pos[0];
-		continue;
 		auto r = dist(gen);
 		size_t j = 0;
 		while (r > p[pos[j]])

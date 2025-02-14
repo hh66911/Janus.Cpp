@@ -16,6 +16,9 @@
     <Filter Include="GGML">
       <UniqueIdentifier>{743d3e35-b0ca-4779-9adb-7fb616b41eab}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Tokenizer">
+      <UniqueIdentifier>{b95b0142-6566-4ae5-bcb7-3ebb9f1031b7}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Janus.Cpp.cpp">
@@ -32,6 +35,9 @@
     </ClCompile>
     <ClCompile Include="vq_model.cpp">
       <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="tokenizer.cpp">
+      <Filter>Tokenizer</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -97,6 +103,12 @@
     </ClInclude>
     <ClInclude Include="vq_model.h">
       <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="tokenizer_models.h">
+      <Filter>Tokenizer</Filter>
+    </ClInclude>
+    <ClInclude Include="tokenizer.h">
+      <Filter>Tokenizer</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

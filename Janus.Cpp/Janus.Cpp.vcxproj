@@ -143,9 +143,11 @@
     <ClCompile Include="language_model.cpp" />
     <ClCompile Include="quant.cpp" />
     <ClCompile Include="tensor_utils.cpp" />
+    <ClCompile Include="tokenizer.cpp" />
     <ClCompile Include="vq_model.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="tokenizer_models.h" />
     <ClInclude Include="ggml\include\ggml-alloc.h" />
     <ClInclude Include="ggml\include\ggml-backend.h" />
     <ClInclude Include="ggml\include\ggml-blas.h" />
@@ -166,6 +168,7 @@
     <ClInclude Include="quant.h" />
     <ClInclude Include="tensor_utils.h" />
     <ClInclude Include="timer.h" />
+    <ClInclude Include="tokenizer.h" />
     <ClInclude Include="vq_model.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
