@@ -55,8 +55,9 @@ BPEModel load_bpe_model(std::filesystem::path model_folder)
 	return model;
 }
 
-std::vector<int> tokenizer_encode(const BPEModel& model, std::vector<uint8_t> text)
+std::vector<int> tokenizer_encode(const BPEModel& model, std::string raw_text)
 {
+	std::vector<uint8_t> text(raw_text.begin(), raw_text.end());
 	// 将文本转换为字节序列（UTF-8编码）
 	std::vector<std::pair<size_t, int>> special_positions;
 	int special_id = BPEModel::special_start;

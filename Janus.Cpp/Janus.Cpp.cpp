@@ -137,3 +137,9 @@ int main_gen(int argc, char** argv)
 	cv::imwrite("inspect/out1.png", imgs[0]);
 	return 0;
 }
+
+int main()
+{
+	std::string input_str = "自然语言处理";
+	return -1;
+}

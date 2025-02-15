@@ -91,9 +91,9 @@ public:
 };
 
 struct BPEModel {
-	std::vector<std::vector<uint8_t>> vocab; // tokenµ½idµÄÓ³Éä
+	std::vector<std::vector<uint8_t>> vocab; // tokenåˆ°idçš„æ˜ å°„
 	Replacer vocab_replacer;
-	std::vector<std::vector<uint8_t>> special_tokens; // ÌØÊâtokenµ½idµÄÓ³Éä
-	std::vector<std::vector<uint8_t>> byte_map; // ×Ö½Úµ½token charµÄÓ³Éä
+	std::vector<std::vector<uint8_t>> special_tokens; // ç‰¹æ®Štokenåˆ°idçš„æ˜ å°„
+	std::vector<std::vector<uint8_t>> byte_map; // å­—èŠ‚åˆ°token charçš„æ˜ å°„
 	constexpr static int special_start = 100000;
 };
