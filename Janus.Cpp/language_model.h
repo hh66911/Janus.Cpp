@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <ggml.h>
 #include <ggml-cpu.h>

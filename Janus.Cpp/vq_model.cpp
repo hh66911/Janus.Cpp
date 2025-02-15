@@ -1,4 +1,4 @@
-
+﻿
 #include "vq_model.h"
 
 GenDecoder::GenDecoder(ggml_backend* backend)

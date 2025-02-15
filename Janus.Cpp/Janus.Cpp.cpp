@@ -1,145 +1,153 @@
-﻿// Janus.Cpp.cpp : 此文件包含 "main" 函数。程序执行将在此处开始并结束。
-//
-
-#include <ggml.h>
-#include <ggml-cpu.h>
-#include <ggml-blas.h>
-#include <ggml-cuda.h>
-#pragma comment(lib, "ggml.lib")
-#pragma comment(lib, "ggml-base.lib")
-#pragma comment(lib, "ggml-cpu.lib")
-#pragma comment(lib, "ggml-blas.lib")
-#pragma comment(lib, "ggml-cuda.lib")
-
-#include <iostream>
+﻿#include <iostream>
 #include <memory>
 #include <vector>
 #include <array>
 #include <string>
-#include <ranges>
 #include <filesystem>
 #include <fstream>
-#include <random>
 #include <opencv2/opencv.hpp>
-
-#ifndef _DEBUG
-constexpr int num_threads = 16;
-#else
-constexpr int num_threads = 1;
-#endif
+#include <Windows.h>
+#include <thread>
+#include <locale>
 
 #include "vq_model.h"
 #include "language_model.h"
 #include "timer.h"
 #include "tokenizer.h"
 
-std::vector<cv::Mat> decode_images(
-	std::vector<int> batch_token_ids, size_t num_imgs, size_t img_sz)
-{
-	// auto backend = ggml_backend_cuda_init(0);
-	auto backend = ggml_backend_cpu_init();
-	ggml_backend_cpu_set_n_threads(backend, 16);
-	GenDecoder decoder{ backend };
-	const size_t num_patchs_w = img_sz / 16;
-	const size_t num_tokens_per_img = num_patchs_w * num_patchs_w;
+#include "generate.h"
 
-	std::vector<cv::Mat> imgs;
-	for (auto i : std::views::iota(0ull, num_imgs))
-	{
-		std::vector<int> token_ids(
-			batch_token_ids.begin() + i * num_tokens_per_img,
-			batch_token_ids.begin() + (i + 1) * num_tokens_per_img);
-		auto img = decoder.decode_img_tokens(token_ids, num_imgs, num_patchs_w);
-		cv::Mat img_mat(int(img_sz), int(img_sz), CV_8UC3);
-		auto float_span = std::span(
-			reinterpret_cast<float*>(img.data()),
-			img_sz * img_sz * 3);
-		for (auto& f : float_span)
-			f = float(std::clamp((f + 1.) / 2 * 255, 0., 255.));
-		const size_t channel_offset = img_sz * img_sz;
-		if (img_sz > std::numeric_limits<int>::max())
-			throw std::runtime_error("Img too BIG !!!");
-#pragma omp parallel for
-		for (int i = 0; i < int(img_sz); i++)
+std::string edit_text;
+int main(int argc, char** argv)
+{
+	std::locale::global(std::locale("zh_CN.utf8"));
+
+	// 窗口过程函数
+	auto WndProc = [](
+		HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam
+		) -> LRESULT
 		{
-			for (int j = 0; j < int(img_sz); j++)
-			{
-				auto idx = i * img_sz + j;
-				auto r = (uint8_t)float_span[channel_offset * 0 + idx];
-				auto g = (uint8_t)float_span[channel_offset * 1 + idx];
-				auto b = (uint8_t)float_span[channel_offset * 2 + idx];
-				img_mat.at<cv::Vec3b>(i, j) = cv::Vec3b(b, g, r);
+			static HFONT hFont = NULL;
+			constexpr uint64_t ID_BUTTON = 1;
+			constexpr uint64_t ID_EDIT = 2;
+			switch (msg) {
+			case WM_CREATE: {
+				// 创建字体（宋体，四号字，约 14 磅）
+				hFont = CreateFont(
+					-MulDiv(14, GetDeviceCaps(GetDC(hwnd), LOGPIXELSY), 72), // 字体高度
+					0,                      // 字体宽度
+					0,                      // 字体倾斜角度
+					0,                      // 字体倾斜角度
+					FW_NORMAL,              // 字体粗细
+					FALSE,                  // 是否斜体
+					FALSE,                  // 是否下划线
+					FALSE,                  // 是否删除线
+					DEFAULT_CHARSET,        // 字符集
+					OUT_DEFAULT_PRECIS,     // 输出精度
+					CLIP_DEFAULT_PRECIS,    // 裁剪精度
+					DEFAULT_QUALITY,        // 字体质量
+					DEFAULT_PITCH | FF_SWISS, // 字体间距和字体系列
+					L"宋体"                 // 字体名称
+				);
+
+				// 创建按钮
+				HWND hButton = CreateWindow(L"button", L"Click Me",
+					WS_VISIBLE | WS_CHILD,
+					125, 270, 200, 50,
+					hwnd, (HMENU)ID_BUTTON, NULL, NULL);
+				// 设置按钮字体
+				SendMessage(hButton, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(TRUE, 0));
+
+				// 创建文本框
+				HWND hEdit = CreateWindow(L"edit", L"",
+					WS_VISIBLE | WS_CHILD | WS_BORDER | ES_MULTILINE | ES_AUTOVSCROLL,
+					75, 50, 300, 200,
+					hwnd, (HMENU)ID_EDIT, NULL, NULL);
+				// 设置文本框字体
+				SendMessage(hEdit, WM_SETFONT, (WPARAM)hFont, MAKELPARAM(TRUE, 0));
+				break;
+			}case WM_COMMAND: {
+				// 检查是否是按钮点击事件
+				if (LOWORD(wParam) == 1) {
+					// 关闭窗口
+					PostMessage(hwnd, WM_CLOSE, 0, 0);
+				}
+				break;
 			}
-		}
-		imgs.push_back(img_mat);
+			case WM_DESTROY: {
+				// 获取文本框的内容
+				HWND hEdit = GetDlgItem(hwnd, 2);
+				int len = GetWindowTextLength(hEdit);
+
+				std::wstring text(len + 1, L'\0');
+				edit_text.resize(text.length() * 3);
+				GetWindowText(hEdit, text.data(), len + 1);
+				WideCharToMultiByte(
+					CP_UTF8, 0, text.data(), -1,
+					edit_text.data(), (int)edit_text.size(),
+					NULL, NULL);
+				edit_text.resize(strlen(edit_text.c_str()));
+
+				PostQuitMessage(0);
+				break;
+			}
+			default:
+				return DefWindowProc(hwnd, msg, wParam, lParam);
+			}
+			return 0;
+		};
+
+	// 注册窗口类
+	SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+	WNDCLASS wc = { 0 };
+	auto hInstance = GetModuleHandleA(NULL);
+	wc.lpfnWndProc = WndProc;
+	wc.hInstance = hInstance;
+	wc.lpszClassName = L"MyWindowClass";
+	// 不使用默认的窗口样式，避免显示边框
+	wc.style = 0;
+
+	RegisterClass(&wc);
+
+	// 创建窗口
+	HWND hwnd = CreateWindow(wc.lpszClassName, L"Button Window",
+		WS_OVERLAPPEDWINDOW,
+		CW_USEDEFAULT, CW_USEDEFAULT, 470, 400,
+		NULL, NULL, hInstance, NULL);
+
+	if (hwnd == NULL) {
+		return 0;
 	}
 
-	ggml_backend_free(backend);
-	return imgs;
-}
+	// 显示窗口
+	ShowWindow(hwnd, SW_SHOW);
+	UpdateWindow(hwnd);
 
-std::vector<cv::Mat> generate(
-	std::vector<uint8_t> embeddings,
-	std::shared_ptr<LanguageModel> model,
-	float temperature = 1,
-	int num_imgs = 16,
-	int img_size = 384,
-	float cfg_weight = 5
-)
-{
-	const int num_patchs = img_size * img_size / 256;
-	const size_t input_len = embeddings.size() / 4096 / num_imgs / 2 / 4;
+	std::cout << "请输入文本" << std::endl;
 
-	std::vector<int> generated_tokens; // Shape: [576, parallel_size]
-	std::vector<int> input_ids;
-	// Pre-fill
-	{
-		std::cout << "Token     0";
-		auto result = model->run_model(embeddings, num_imgs, input_len);
-		auto [logits_cond, logits_uncond] =
-			model->GenHead(result, num_imgs, input_len);
-		input_ids = model->sample_once(
-			logits_cond, logits_uncond, num_imgs, temperature, cfg_weight);
-		generated_tokens.append_range(input_ids);
-		std::cout << std::setw(8) << input_ids[0] << std::endl;
-	}
-	ModelTimer::GetInstance().ClearAll();
-	for (auto token_num : std::views::iota(1, num_patchs))
-	{
-		std::cout << "Token " << std::setw(5) << token_num;
-		auto embeddings = model->gen_head_align(input_ids, num_imgs);
-		auto result = model->run_model(embeddings, num_imgs, 1);
-		auto [logits_cond, logits_uncond] = model->GenHead(result, num_imgs, 1);
-		input_ids = model->sample_once(
-			logits_cond, logits_uncond, num_imgs, temperature, cfg_weight);
-		generated_tokens.append_range(input_ids);
-		std::cout << std::setw(8) << input_ids[0] << std::endl;
-		ModelTimer::GetInstance().ClearAll();
+	// 等待窗口关闭
+	MSG msg = { 0 };
+	while (GetMessage(&msg, NULL, 0, 0)) {
+		TranslateMessage(&msg);
+		DispatchMessage(&msg);
 	}
 
-	return decode_images(generated_tokens, num_imgs, img_size);
-}
+	std::cout << "文本: " << edit_text << std::endl;
 
-int main_gen(int argc, char** argv)
-{
 	constexpr size_t num_imgs = 1;
 	constexpr size_t img_sz = 384;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
 	auto language_model = std::make_shared<LanguageModel>(true, 30, num_threads);
-	std::vector<int> input{ // 一个穿裙子的小女孩在草地上玩耍。
-		100000, 5726, 25, 207, 1615,
-		29834, 66515, 8781, 18640, 612,
-		8143, 29445, 62913, 398, 185,
-		185, 77398, 25, 100016
-	};
+	auto tokenizer = load_bpe_model(R"(D:\Python\Janus\Janus-Pro-7B)");
+	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
+
 	auto embeddings = language_model->preprocess(input, num_imgs, num_patchs);
 	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5);
-	cv::imwrite("inspect/out1.png", imgs[0]);
-	return 0;
-}
 
-int main()
-{
-	std::string input_str = "自然语言处理";
+	cv::imshow("output", imgs[0]);
+	cv::waitKey(0);
+	cv::imwrite("generated-imgs/out1.png", imgs[0]);
+	return 0;
+
 	return -1;
 }

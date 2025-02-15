@@ -1,4 +1,4 @@
-#include <sstream>
+ï»¿#include <sstream>
 #include <algorithm>
 #include <ranges>
 
@@ -14,7 +14,7 @@ BPEModel load_bpe_model(std::filesystem::path model_folder)
 	std::ifstream fp;
 	std::string line;
 
-	// ½âÎö´Ê»ã±í
+	// è§£æè¯æ±‡è¡¨
 	fp.open(vocab);
 	if (fp.good())
 	{
@@ -25,7 +25,7 @@ BPEModel load_bpe_model(std::filesystem::path model_folder)
 		}
 	}
 	else
-		throw std::runtime_error("ÎŞ·¨´ò¿ª´Ê»ã±íÎÄ¼ş");
+		throw std::runtime_error("æ— æ³•æ‰“å¼€è¯æ±‡è¡¨æ–‡ä»¶");
 	model.vocab_replacer.load_vocab(model.vocab);
 
 	fp.close();
@@ -38,7 +38,7 @@ BPEModel load_bpe_model(std::filesystem::path model_folder)
 		}
 	}
 	else
-		throw std::runtime_error("ÎŞ·¨´ò¿ª×Ö½ÚÓ³ÉäÎÄ¼ş");
+		throw std::runtime_error("æ— æ³•æ‰“å¼€å­—èŠ‚æ˜ å°„æ–‡ä»¶");
 
 	fp.close();
 	fp.open(special_tokens);
@@ -50,7 +50,7 @@ BPEModel load_bpe_model(std::filesystem::path model_folder)
 		}
 	}
 	else
-		throw std::runtime_error("ÎŞ·¨´ò¿ªÌØÊâtokenÎÄ¼ş");
+		throw std::runtime_error("æ— æ³•æ‰“å¼€ç‰¹æ®Štokenæ–‡ä»¶");
 
 	return model;
 }
@@ -58,7 +58,7 @@ BPEModel load_bpe_model(std::filesystem::path model_folder)
 std::vector<int> tokenizer_encode(const BPEModel& model, std::string raw_text)
 {
 	std::vector<uint8_t> text(raw_text.begin(), raw_text.end());
-	// ½«ÎÄ±¾×ª»»Îª×Ö½ÚĞòÁĞ£¨UTF-8±àÂë£©
+	// å°†æ–‡æœ¬è½¬æ¢ä¸ºå­—èŠ‚åºåˆ—ï¼ˆUTF-8ç¼–ç ï¼‰
 	std::vector<std::pair<size_t, int>> special_positions;
 	int special_id = BPEModel::special_start;
 	for (auto spe : model.special_tokens)

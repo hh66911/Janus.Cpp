@@ -1,4 +1,4 @@
-#include "tensor_utils.h"
+ï»¿#include "tensor_utils.h"
 
 #include <filesystem>
 #include <string>
@@ -77,8 +77,8 @@ void MidTensors::SaveMidTensors(const std::string& path)
 		std::ofstream ofs(file_name, std::ios::binary);
 		while (!ofs.good())
 		{
-			std::cerr << "ÎÞ·¨´ò¿ªÎÄ¼þ£º" << file_name << std::endl;
-			std::cout << "»Ø³µÒÔÖØÊÔ" << std::endl;
+			std::cerr << "æ— æ³•æ‰“å¼€æ–‡ä»¶ï¼š" << file_name << std::endl;
+			std::cout << "å›žè½¦ä»¥é‡è¯•" << std::endl;
 			std::cin.get();
 			ofs.open(file_name, std::ios::binary);
 		}

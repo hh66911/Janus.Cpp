@@ -39,6 +39,9 @@
     <ClCompile Include="tokenizer.cpp">
       <Filter>Tokenizer</Filter>
     </ClCompile>
+    <ClCompile Include="generate.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ggml\include\ggml.h">
@@ -109,6 +112,9 @@
     </ClInclude>
     <ClInclude Include="tokenizer.h">
       <Filter>Tokenizer</Filter>
+    </ClInclude>
+    <ClInclude Include="generate.h">
+      <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
 </Project>

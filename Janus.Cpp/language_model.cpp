@@ -1,4 +1,4 @@
-#include "language_model.h"
+ï»¿#include "language_model.h"
 
 #include "quant.h"
 #include "timer.h"
@@ -55,7 +55,7 @@ LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 			R"(C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\model-file\layer_)"
 			+ std::to_string(layer_idx) + ".bin");
 		return;
-		// ´ÓÎÄ¼ş¼ÓÔØÈ¨ÖØ²¢Á¿»¯
+		// ä»æ–‡ä»¶åŠ è½½æƒé‡å¹¶é‡åŒ–
 		F32TensorFromFile(layer_ctx, norm_weight,
 			GetWeightFileName(layer_idx, "post_attention_layernorm"));
 		F32TensorFromFile(layer_ctx, input_norm_weight,
@@ -166,7 +166,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 
 	ggml_tensor* output = nullptr;
 	{
-		// ²ã¹éÒ»»¯ Shape: [batch, seq_len, 4096]
+		// å±‚å½’ä¸€åŒ– Shape: [batch, seq_len, 4096]
 		auto rms_normed_input = ggml_rms_norm(ctx, input_emb, eps);
 		rms_normed_input = ggml_mul_inplace(ctx, rms_normed_input, input_norm_weight);
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, rms_normed_input, "rms_normed_input");
@@ -176,15 +176,15 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		auto v = ggml_mul_mat(ctx, v_proj, rms_normed_input);
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_raw");
 
-		// µ÷ÕûĞÎ×´µ½ [batch, seq_len, num_head, head_dim]
+		// è°ƒæ•´å½¢çŠ¶åˆ° [batch, seq_len, num_head, head_dim]
 		q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 1, 3));
 		q = view_tensor(ctx, q, head_dim, num_heads * batch_size, input_len);
 		k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 1, 3));
 		k = view_tensor(ctx, k, head_dim, num_heads * batch_size, input_len);
 		v = view_tensor(ctx, v, head_dim, num_heads, input_len, batch_size);
 
-		// ×¢Òâ£¡£¡£¡µ±Ê¹ÓÃCUDA×÷ÎªGGMLµÄBackendÊ±£¬NeoXµÄRoPE²Ù×÷²»»á±éÀúbatchÎ¬¶È£¡£¡£¡
-		// ½â¾ö·½°¸£º½«batchÎ¬¶ÈºÍnum_headÎ¬¶ÈºÏ²¢£¬RoPEÖ®ºóÔÙ²ğ·Ö
+		// æ³¨æ„ï¼ï¼ï¼å½“ä½¿ç”¨CUDAä½œä¸ºGGMLçš„Backendæ—¶ï¼ŒNeoXçš„RoPEæ“ä½œä¸ä¼šéå†batchç»´åº¦ï¼ï¼ï¼
+		// è§£å†³æ–¹æ¡ˆï¼šå°†batchç»´åº¦å’Œnum_headç»´åº¦åˆå¹¶ï¼ŒRoPEä¹‹åå†æ‹†åˆ†
 		q = ggml_rope_inplace(ctx, q, pos_ids, head_dim, GGML_ROPE_TYPE_NEOX);
 		k = ggml_rope_inplace(ctx, k, pos_ids, head_dim, GGML_ROPE_TYPE_NEOX);
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_rope_raw");
@@ -197,14 +197,14 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_rope");
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_rope");
 
-		// ggml_permute Óë torch.permute ²»Ò»ÖÂ
-		// ggml_permute ½ÓÊÜµÄ²ÎÊıÎªÔ´tensorÎ¬¶ÈµÄ¶ÔÓ¦Î»ÖÃ
-		// torch.permute ½ÓÊÜµÄ²ÎÊıÎªÄ¿±êtensorÎ¬¶È¶ÔÓ¦µÄÎ»ÖÃ
+		// ggml_permute ä¸ torch.permute ä¸ä¸€è‡´
+		// ggml_permute æ¥å—çš„å‚æ•°ä¸ºæºtensorç»´åº¦çš„å¯¹åº”ä½ç½®
+		// torch.permute æ¥å—çš„å‚æ•°ä¸ºç›®æ ‡tensorç»´åº¦å¯¹åº”çš„ä½ç½®
 		// ggml_permute: dst->ne[permute] = src->ne
 		// torch.permute: dst->ne = src->ne[permute]
 		v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 0, 3)); // [batch, num_head, head_dim, seq_len]
 
-		// Á¬½Ó Cached K, V
+		// è¿æ¥ Cached K, V
 		if (cached_length > 0)
 		{
 			auto past_k = ggml_new_tensor_4d(ctx, k->type,
@@ -217,7 +217,7 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 			k = ggml_concat(ctx, past_k, k, 1);
 			v = ggml_concat(ctx, past_v, v, 0);
 
-			// ÓÃÓÚ·ÀÖ¹ÖØ¸´·ÖÅäÄÚ´æ
+			// ç”¨äºé˜²æ­¢é‡å¤åˆ†é…å†…å­˜
 			auto qk_buffer = ggml_new_tensor_4d(ctx, q->type,
 				head_dim, num_heads, max_cached_length - cached_length, batch_size * 2);
 			ggml_build_forward_expand(layer_graph, qk_buffer);
@@ -238,9 +238,9 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat");
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_cur");
 
-		// ÓÃ·¨ÌáÊ¾£ºggml_mul_mat(ctx, a, b) => b * a^T
-		// ·µ»ØµÄÕÅÁ¿ĞÎ×´Îª [ne3, ne2, b->ne[1], a->ne[1]]
-		// ÌØ´Ë¼ÇÂ¼£¬ÒÔÃâÍü¼Ç
+		// ç”¨æ³•æç¤ºï¼šggml_mul_mat(ctx, a, b) => b * a^T
+		// è¿”å›çš„å¼ é‡å½¢çŠ¶ä¸º [ne3, ne2, b->ne[1], a->ne[1]]
+		// ç‰¹æ­¤è®°å½•ï¼Œä»¥å…å¿˜è®°
 		// Shape: [batch, num_head * head_dim, seq_len, seq_len]
 		ggml_tensor* QK = ggml_mul_mat(ctx, k, q); // QK = Q * K^T
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, QK, "QK");
@@ -265,18 +265,18 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 			flatten_tensor(ctx, attn_output), flatten_tensor(ctx, input_emb));
 		residual = view_tensor(ctx, residual, 4096u, input_len, batch_size);
 
-		// ²ã¹éÒ»»¯
+		// å±‚å½’ä¸€åŒ–
 		auto mlp_input = ggml_rms_norm(ctx, residual, eps);
 		mlp_input = ggml_mul_inplace(ctx, mlp_input, norm_weight);
 
-		// MLP ²ã
+		// MLP å±‚
 		auto gate = ggml_mul_mat(ctx, gate_proj, mlp_input);
 		auto up = ggml_mul_mat(ctx, up_proj, mlp_input);
-		// SiLU ¼¤»îº¯Êı
+		// SiLU æ¿€æ´»å‡½æ•°
 		gate = ggml_silu_inplace(ctx, gate);
-		// ÖğÔªËØÏà³Ë
+		// é€å…ƒç´ ç›¸ä¹˜
 		auto gate_up = ggml_mul_inplace(ctx, gate, up);
-		// Í¨¹ı down_proj ²ã
+		// é€šè¿‡ down_proj å±‚
 		auto down = ggml_mul_mat(ctx, down_proj, gate_up);
 
 		output = ggml_add_inplace(ctx,
@@ -407,7 +407,7 @@ LanguageModel::LanguageModel(
 
 	cuda_ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(cuda_backend));
 
-	// ´ÓÎÄ¼ş¼ÓÔØ
+	// ä»æ–‡ä»¶åŠ è½½
 	input_embeddings = ggml_new_tensor_2d(
 		model_ctx, GGML_TYPE_F16, 4096u, 102400u);
 	F16TensorFromFile(model_ctx, input_embeddings,
@@ -462,7 +462,7 @@ std::vector<uint8_t> LanguageModel::preprocess(
 
 	auto tokens = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, input_len, parallel_size * 2ull);
 	std::copy(tokens_data.begin(), tokens_data.end(), static_cast<int*>(tokens->data));
-	// »ñÈ¡ÊäÈëÇ¶Èë
+	// è·å–è¾“å…¥åµŒå…¥
 	ggml_tensor* inputs_embeds = ggml_get_rows(ctx,
 		input_embeddings,
 		ggml_view_1d(ctx, tokens, parallel_size * 2 * input_len, 0)
@@ -512,7 +512,7 @@ std::vector<uint8_t> LanguageModel::run_model(
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Model);
 	for (auto i : std::views::iota(0ull, gpu_offload_num))
 	{
-		// ÔËĞĞÄ£ĞÍ
+		// è¿è¡Œæ¨¡å‹
 		auto& layer = offloads[i];
 		input_embs_data = layer.run_layer(
 			input_embs_data, cuda_ga, parallel_size * 2, input_len);
@@ -544,7 +544,7 @@ std::pair<
 	if (input_len > 1) {
 		constexpr size_t N_offset = 4096ull * 4;
 		const size_t B_offset = input_len * N_offset;
-		// È¡×îºóÒ»¸ö token µÄÊä³ö
+		// å–æœ€åä¸€ä¸ª token çš„è¾“å‡º
 		outputs.erase(outputs.begin(), outputs.end() - B_offset - N_offset);
 		outputs.erase(outputs.begin() + N_offset, outputs.end() - N_offset);
 	}
@@ -595,7 +595,7 @@ std::vector<int> LanguageModel::sample_once(
 	ggml_free(ctx);
 	ggml_gallocr_free(cpu_ga);
 
-	// multinomial ²ÉÑù
+	// multinomial é‡‡æ ·
 	auto probs = std::span(
 		reinterpret_cast<float*>(probs_data.data()), probs_data.size() / 4);
 	std::vector<int> sample_result(parallel_size);

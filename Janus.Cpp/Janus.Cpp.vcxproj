@@ -141,6 +141,7 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="generate.cpp" />
     <ClCompile Include="Janus.Cpp.cpp" />
     <ClCompile Include="language_model.cpp" />
     <ClCompile Include="quant.cpp" />
@@ -149,6 +150,7 @@
     <ClCompile Include="vq_model.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="generate.h" />
     <ClInclude Include="tokenizer_models.h" />
     <ClInclude Include="ggml\include\ggml-alloc.h" />
     <ClInclude Include="ggml\include\ggml-backend.h" />

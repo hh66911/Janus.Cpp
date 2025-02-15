@@ -1,4 +1,4 @@
-#include "quant.h"
+﻿#include "quant.h"
 
 #include <iostream>
 
