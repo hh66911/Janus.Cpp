@@ -134,20 +134,37 @@ int main(int argc, char** argv)
 
 	std::cout << "文本: " << edit_text << std::endl;
 
+	SetProcessAffinityMask(GetCurrentProcess(), 0xFFFF);
+
 	constexpr size_t num_imgs = 1;
 	constexpr size_t img_sz = 384;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
 	auto language_model = std::make_shared<LanguageModel>(true, 30, num_threads);
-	auto tokenizer = load_bpe_model(R"(D:\Python\Janus\Janus-Pro-7B)");
+	auto tokenizer = load_bpe_model(R"(.\Janus-Pro-7B)");
 	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
+	const std::vector<int> gen_prefix = { 100000, 5726, 25, 207 };
+	input.insert_range(input.begin(), gen_prefix);
+	input.push_back(100016);
 
+	auto time_start = std::chrono::high_resolution_clock::now();
 	auto embeddings = language_model->preprocess(input, num_imgs, num_patchs);
-	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5);
+	std::vector<std::vector<int>> outtokens;
+	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5, outtokens);
+	auto time_end = std::chrono::high_resolution_clock::now();
+	auto dur_sec = std::chrono::duration_cast<std::chrono::seconds>(time_end - time_start);
+	std::cout << "用时: " << dur_sec << std::endl;
+
+	for (auto [i, token_ids] : outtokens | std::views::enumerate) {
+		std::string decoded = tokenizer_decode(tokenizer, token_ids);
+		std::cout << "图片 " << i + 1 << "：" << decoded << std::endl;
+	}
+
+	auto output_folder = std::filesystem::current_path() / "generated-imgs";
+	for (auto [i, img] : imgs | std::views::enumerate) {
+		cv::imwrite((output_folder / ("out" + std::to_string(i) + ".png")).string(), img);
+	}
 
 	cv::imshow("output", imgs[0]);
-	cv::waitKey(0);
-	cv::imwrite("generated-imgs/out1.png", imgs[0]);
+	cv::waitKey();
 	return 0;
-
-	return -1;
 }

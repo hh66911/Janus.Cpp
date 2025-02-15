@@ -365,3 +365,5 @@ FodyWeavers.xsd
 inspect/
 *.bin
 generated-imgs/
+Janus-Pro-7B/
+Janus-Pro-7B.7z

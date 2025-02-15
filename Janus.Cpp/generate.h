@@ -18,5 +18,8 @@ std::vector<cv::Mat> generate(
 	float temperature = 1,
 	int num_imgs = 16,
 	int img_size = 384,
-	float cfg_weight = 5
+	float cfg_weight = 5,
+	std::optional<
+		std::reference_wrapper<std::vector<std::vector<int>>>
+	> output_tokens = std::nullopt
 );

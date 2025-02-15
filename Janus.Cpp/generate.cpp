@@ -19,7 +19,9 @@
 
 #include "timer.h"
 
-std::vector<cv::Mat> decode_images(std::vector<int> batch_token_ids, size_t num_imgs, size_t img_sz)
+std::vector<cv::Mat> decode_images(
+	std::vector<std::vector<int>> batch_token_ids,
+	size_t num_imgs, size_t img_sz)
 {
 	// auto backend = ggml_backend_cuda_init(0);
 	auto backend = ggml_backend_cpu_init();
@@ -29,11 +31,8 @@ std::vector<cv::Mat> decode_images(std::vector<int> batch_token_ids, size_t num_
 	const size_t num_tokens_per_img = num_patchs_w * num_patchs_w;
 
 	std::vector<cv::Mat> imgs;
-	for (auto i : std::views::iota(0ull, num_imgs))
+	for (auto& token_ids : batch_token_ids)
 	{
-		std::vector<int> token_ids(
-			batch_token_ids.begin() + i * num_tokens_per_img,
-			batch_token_ids.begin() + (i + 1) * num_tokens_per_img);
 		auto img = decoder.decode_img_tokens(token_ids, num_imgs, num_patchs_w);
 		cv::Mat img_mat(int(img_sz), int(img_sz), CV_8UC3);
 		auto float_span = std::span(
@@ -67,7 +66,11 @@ std::vector<cv::Mat> generate(
 	std::vector<uint8_t> embeddings,
 	std::shared_ptr<LanguageModel> model,
 	float temperature, int num_imgs,
-	int img_size, float cfg_weight)
+	int img_size, float cfg_weight,
+	std::optional<
+		std::reference_wrapper<std::vector<std::vector<int>>>
+	> output_tokens
+)
 {
 	const int num_patchs = img_size * img_size / 256;
 	const size_t input_len = embeddings.size() / 4096 / num_imgs / 2 / 4;
@@ -99,5 +102,12 @@ std::vector<cv::Mat> generate(
 		ModelTimer::GetInstance().ClearAll();
 	}
 
-	return decode_images(generated_tokens, num_imgs, img_size);
+	std::vector<std::vector<int>> batch_tokens(num_imgs);
+	for (size_t i = 0; i < num_patchs; i++) {
+		for (size_t j = 0; j < num_imgs; j++)
+			batch_tokens[j].push_back(generated_tokens[i + j * img_size]);
+	}
+	output_tokens->get() = batch_tokens;
+
+	return decode_images(batch_tokens, num_imgs, img_size);
 }

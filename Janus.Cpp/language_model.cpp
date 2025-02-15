@@ -52,21 +52,8 @@ LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 		cached_k = std::make_shared<std::vector<uint8_t>>();
 		cached_v = std::make_shared<std::vector<uint8_t>>();
 		LoadFromFile(
-			R"(C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\model-file\layer_)"
+			R"(.\Janus-Pro-7B\model-file\layer_)"
 			+ std::to_string(layer_idx) + ".bin");
-		return;
-		// 从文件加载权重并量化
-		F32TensorFromFile(layer_ctx, norm_weight,
-			GetWeightFileName(layer_idx, "post_attention_layernorm"));
-		F32TensorFromFile(layer_ctx, input_norm_weight,
-			GetWeightFileName(layer_idx, "input_layernorm"));
-		QuantTensorFromFile(layer_ctx, q_proj, GetWeightFileName(layer_idx, "self_attn.q_proj"));
-		QuantTensorFromFile(layer_ctx, k_proj, GetWeightFileName(layer_idx, "self_attn.k_proj"));
-		QuantTensorFromFile(layer_ctx, v_proj, GetWeightFileName(layer_idx, "self_attn.v_proj"));
-		QuantTensorFromFile(layer_ctx, o_proj, GetWeightFileName(layer_idx, "self_attn.o_proj"));
-		QuantTensorFromFile(layer_ctx, gate_proj, GetWeightFileName(layer_idx, "mlp.gate_proj"));
-		QuantTensorFromFile(layer_ctx, up_proj, GetWeightFileName(layer_idx, "mlp.up_proj"));
-		QuantTensorFromFile(layer_ctx, down_proj, GetWeightFileName(layer_idx, "mlp.down_proj"));
 	}
 }
 
@@ -411,10 +398,10 @@ LanguageModel::LanguageModel(
 	input_embeddings = ggml_new_tensor_2d(
 		model_ctx, GGML_TYPE_F16, 4096u, 102400u);
 	F16TensorFromFile(model_ctx, input_embeddings,
-		R"(D:\Python\Janus\model-file\embed_tokens.bin)");
+		R"(.\Janus-Pro-7B\model-file\embed_tokens.bin)");
 	output_rms_norm = ggml_new_tensor_1d(model_ctx, GGML_TYPE_F32, 4096ull);
 	F32TensorFromFile(model_ctx, output_rms_norm,
-		R"(D:\Python\Janus\model-file\norm.weight.bin)");
+		R"(.\Janus-Pro-7B\model-file\norm.weight.bin)");
 
 	if (!load_layers)
 		return;
@@ -650,19 +637,19 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 	mlp_p2_bias = ggml_new_tensor_1d(gen_head_ctx, GGML_TYPE_F32, 4096ull);
 	align_embeddings = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 8ull, 16384ull);
 	ggml_backend_alloc_ctx_tensors(gen_head_ctx, container);
-	auto buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\output_mlp_projector.bin)");
+	auto buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\output_mlp_projector.bin)");
 	ggml_backend_tensor_set(output_mlp_projector, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\vision_head.bin)");
+	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\vision_head.bin)");
 	ggml_backend_tensor_set(vision_head, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\mlp_p1.bin)");
+	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p1.bin)");
 	ggml_backend_tensor_set(mlp_p1, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2.bin)");
+	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p2.bin)");
 	ggml_backend_tensor_set(mlp_p2, buffer.data(), 0, buffer.size());
-	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p1_bias.bin)");
+	buffer = F32DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p1_bias.bin)");
 	ggml_backend_tensor_set(mlp_p1_bias, buffer.data(), 0, buffer.size());
-	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2_bias.bin)");
+	buffer = F32DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p2_bias.bin)");
 	ggml_backend_tensor_set(mlp_p2_bias, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\align_embeddings.bin)");
+	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\align_embeddings.bin)");
 	ggml_backend_tensor_set(align_embeddings, buffer.data(), 0, buffer.size());
 }
 

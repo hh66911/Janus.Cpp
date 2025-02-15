@@ -145,7 +145,7 @@ void ConvertModelFile(std::filesystem::path src, std::filesystem::path dst)
 std::filesystem::path GetWeightFileName(int layer_idx, const std::string& weight_name)
 {
 	std::cout << "Loading weight: layer" << layer_idx << "." << weight_name << std::endl;
-	std::filesystem::path model_folder = R"(D:\Python\Janus\model-file)";
+	std::filesystem::path model_folder = R"(.\Janus-Pro-7B\model-file)";
 	std::filesystem::path file_name = model_folder /
 		(GetLayerWeightName(layer_idx, weight_name) + ".bin");
 	return file_name;

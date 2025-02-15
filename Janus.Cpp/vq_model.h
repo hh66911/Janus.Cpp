@@ -401,7 +401,7 @@ class GenDecoder
 private:
 	const unsigned quant_channels = 8;
 	ggml_backend* backend;
-	const std::filesystem::path folder = R"(D:\Python\Janus\model-file\vq)";
+	const std::filesystem::path folder = R"(.\Janus-Pro-7B\model-file\vq)";
 	DataEater weight_data;
 
 public:
