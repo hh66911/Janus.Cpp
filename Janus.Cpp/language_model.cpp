@@ -6,7 +6,7 @@
 LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 	: backend(container), layer_idx(layer_index)
 {
-	ggml_type type = GGML_TYPE_Q8_0;
+	ggml_type type = GGML_TYPE_Q6_K;
 	constexpr size_t num_tensors = 9;
 	if (backend)
 	{
@@ -47,14 +47,6 @@ LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 	ggml_set_name(down_proj, "down_proj");
 	if (backend)
 		ggml_backend_alloc_ctx_tensors(layer_ctx, backend);
-	else if (layer_idx >= 0)
-	{
-		cached_k = std::make_shared<std::vector<uint8_t>>();
-		cached_v = std::make_shared<std::vector<uint8_t>>();
-		LoadFromFile(
-			R"(.\Janus-Pro-7B\model-file\layer_)"
-			+ std::to_string(layer_idx) + ".bin");
-	}
 }
 
 void LlamaDecoderLayer::FillTo(LlamaDecoderLayer& layer, bool async)
@@ -128,6 +120,40 @@ void LlamaDecoderLayer::LoadFromFile(std::filesystem::path path)
 		ggml_nbytes(down_proj));
 	ifs.read(reinterpret_cast<char*>(norm_weight->data),
 		ggml_nbytes(norm_weight));
+}
+
+void LlamaDecoderLayer::QuantLayer(
+	int layer_idx, ggml_backend* quant_end,
+	std::filesystem::path src, std::filesystem::path dst)
+{
+	LlamaDecoderLayer layer{ -1, quant_end };
+
+	auto base_name = "layers." + std::to_string(layer_idx) + ".";
+	QuantTensorFromFile(layer.layer_ctx, layer.input_norm_weight, src / (base_name + "input_layernorm.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.q_proj, src / (base_name + "self_attn.q_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.k_proj, src / (base_name + "self_attn.k_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.v_proj, src / (base_name + "self_attn.v_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.o_proj, src / (base_name + "self_attn.o_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.gate_proj, src / (base_name + "mlp.gate_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.up_proj, src / (base_name + "mlp.up_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.down_proj, src / (base_name + "mlp.down_proj.weight.bin"));
+	QuantTensorFromFile(layer.layer_ctx, layer.norm_weight, src / (base_name + "post_attention_layernorm.weight.bin"));
+
+	layer.SaveToFile(dst / (base_name + "quant.bin"));
+}
+
+LlamaDecoderLayer LlamaDecoderLayer::FromQuanted(
+	int layer_idx, ggml_backend* backend, std::filesystem::path folder)
+{
+	LlamaDecoderLayer layer{ layer_idx, backend };
+	if (layer_idx < 0)
+		throw std::runtime_error("Invalid layer index");
+
+	layer.cached_k = std::make_shared<std::vector<uint8_t>>();
+	layer.cached_v = std::make_shared<std::vector<uint8_t>>();
+	layer.LoadFromFile(folder / ("layers." + std::to_string(layer_idx) + ".quant.bin"));
+
+	return layer;
 }
 
 ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t input_len)
@@ -204,15 +230,18 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(size_t batch_size, size_t inpu
 			k = ggml_concat(ctx, past_k, k, 1);
 			v = ggml_concat(ctx, past_v, v, 0);
 
-			// 用于防止重复分配内存
-			auto qk_buffer = ggml_new_tensor_4d(ctx, q->type,
-				head_dim, num_heads, max_cached_length - cached_length, batch_size * 2);
-			ggml_build_forward_expand(layer_graph, qk_buffer);
-			auto attn_buffer = ggml_new_tensor_4d(ctx, q->type,
-				max_cached_length - cached_length,
-				max_cached_length - cached_length,
-				num_heads, batch_size * 2);
-			ggml_build_forward_expand(layer_graph, attn_buffer);
+			if (!worst_case_enabled)
+			{
+				// 用于防止重复分配内存
+				auto qk_buffer = ggml_new_tensor_4d(ctx, q->type,
+					head_dim, num_heads, max_cached_length - cached_length, batch_size * 2);
+				ggml_build_forward_expand(layer_graph, qk_buffer);
+				auto attn_buffer = ggml_new_tensor_4d(ctx, q->type,
+					max_cached_length - cached_length,
+					max_cached_length - cached_length,
+					num_heads, batch_size * 2);
+				ggml_build_forward_expand(layer_graph, attn_buffer);
+			}
 		}
 		auto k_cache_new = ggml_cont(ctx, k);
 		ggml_set_name(k_cache_new, "k_cache_new");
@@ -374,7 +403,7 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 }
 
 LanguageModel::LanguageModel(
-	bool load_layers, size_t gpu_offload_layer_num, int num_cpu_threads
+	size_t gpu_offload_layer_num, int num_cpu_threads
 )
 	: cuda_backend(ggml_backend_cuda_init(0)),
 	  cpu_backend(ggml_backend_cpu_init()),
@@ -397,25 +426,40 @@ LanguageModel::LanguageModel(
 	// 从文件加载
 	input_embeddings = ggml_new_tensor_2d(
 		model_ctx, GGML_TYPE_F16, 4096u, 102400u);
-	F16TensorFromFile(model_ctx, input_embeddings,
-		R"(.\Janus-Pro-7B\model-file\embed_tokens.bin)");
 	output_rms_norm = ggml_new_tensor_1d(model_ctx, GGML_TYPE_F32, 4096ull);
-	F32TensorFromFile(model_ctx, output_rms_norm,
-		R"(.\Janus-Pro-7B\model-file\norm.weight.bin)");
+}
 
-	if (!load_layers)
-		return;
-	layers.resize(30);
+LanguageModel LanguageModel::LoadFromBin(
+	size_t gpu_offload_layer_num,
+	int num_cpu_threads,
+	std::filesystem::path src_folder
+)
+{
+	LanguageModel model{ gpu_offload_layer_num, num_cpu_threads };
+	F16TensorFromFile(model.model_ctx, model.input_embeddings,
+		R"(D:\Python\Janus\model-file\embed_tokens.bin)");
+	F32TensorFromFile(model.model_ctx, model.output_rms_norm,
+		R"(D:\Python\Janus\model-file\norm.weight.bin)");
+
+	model.layers.resize(30);
 #pragma omp parallel for
 	for (int i = 0; i < 30; i++)
-		layers[i] = std::make_unique<LlamaDecoderLayer>(i, nullptr);
-
-	offloads.reserve(gpu_offload_num);
-	for (auto i : std::views::iota(0ull, gpu_offload_num))
 	{
-		offloads.emplace_back(-1, cuda_backend);
-		layers[i]->FillTo(offloads[i]);
+		model.layers[i] = std::make_unique<LlamaDecoderLayer>(
+			LlamaDecoderLayer::FromQuanted(i, model.cpu_backend, src_folder / "quanted_layers")
+		);
+		if (model.layers[i]->layer_idx == -1)
+			_ASSERT(false);
 	}
+
+	model.offloads.reserve(gpu_offload_layer_num);
+	for (auto i : std::views::iota(0ull, gpu_offload_layer_num))
+	{
+		model.offloads.emplace_back(-1, model.cuda_backend);
+		model.layers[i]->FillTo(model.offloads[i]);
+	}
+
+	return model;
 }
 
 std::vector<uint8_t> LanguageModel::preprocess(
@@ -522,7 +566,7 @@ std::vector<uint8_t> LanguageModel::run_model(
 
 std::pair<
 	std::vector<uint8_t>, std::vector<uint8_t>
-> LanguageModel::GenHead(
+> LanguageModel::run_gen_head(
 	std::vector<uint8_t> outputs, size_t parallel_size, size_t input_len)
 {
 	if (outputs.size() != parallel_size * 2 * 4096ull * input_len * 4)
@@ -637,19 +681,19 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 	mlp_p2_bias = ggml_new_tensor_1d(gen_head_ctx, GGML_TYPE_F32, 4096ull);
 	align_embeddings = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 8ull, 16384ull);
 	ggml_backend_alloc_ctx_tensors(gen_head_ctx, container);
-	auto buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\output_mlp_projector.bin)");
+	auto buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\output_mlp_projector.bin)");
 	ggml_backend_tensor_set(output_mlp_projector, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\vision_head.bin)");
+	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\vision_head.bin)");
 	ggml_backend_tensor_set(vision_head, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p1.bin)");
+	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\mlp_p1.bin)");
 	ggml_backend_tensor_set(mlp_p1, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p2.bin)");
+	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2.bin)");
 	ggml_backend_tensor_set(mlp_p2, buffer.data(), 0, buffer.size());
-	buffer = F32DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p1_bias.bin)");
+	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p1_bias.bin)");
 	ggml_backend_tensor_set(mlp_p1_bias, buffer.data(), 0, buffer.size());
-	buffer = F32DataFromFile(R"(.\Janus-Pro-7B\model-file\mlp_p2_bias.bin)");
+	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2_bias.bin)");
 	ggml_backend_tensor_set(mlp_p2_bias, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(.\Janus-Pro-7B\model-file\align_embeddings.bin)");
+	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\align_embeddings.bin)");
 	ggml_backend_tensor_set(align_embeddings, buffer.data(), 0, buffer.size());
 }
 

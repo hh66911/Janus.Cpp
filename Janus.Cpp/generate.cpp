@@ -64,7 +64,7 @@ std::vector<cv::Mat> decode_images(
 
 std::vector<cv::Mat> generate(
 	std::vector<uint8_t> embeddings,
-	std::shared_ptr<LanguageModel> model,
+	LanguageModel& model,
 	float temperature, int num_imgs,
 	int img_size, float cfg_weight,
 	std::optional<
@@ -80,10 +80,10 @@ std::vector<cv::Mat> generate(
 	// Pre-fill
 	{
 		std::cout << "Token     0";
-		auto result = model->run_model(embeddings, num_imgs, input_len);
+		auto result = model.run_model(embeddings, num_imgs, input_len);
 		auto [logits_cond, logits_uncond] =
-			model->GenHead(result, num_imgs, input_len);
-		input_ids = model->sample_once(
+			model.run_gen_head(result, num_imgs, input_len);
+		input_ids = model.sample_once(
 			logits_cond, logits_uncond, num_imgs, temperature, cfg_weight);
 		generated_tokens.append_range(input_ids);
 		std::cout << std::setw(8) << input_ids[0] << std::endl;
@@ -92,10 +92,10 @@ std::vector<cv::Mat> generate(
 	for (auto token_num : std::views::iota(1, num_patchs))
 	{
 		std::cout << "Token " << std::setw(5) << token_num;
-		auto embeddings = model->gen_head_align(input_ids, num_imgs);
-		auto result = model->run_model(embeddings, num_imgs, 1);
-		auto [logits_cond, logits_uncond] = model->GenHead(result, num_imgs, 1);
-		input_ids = model->sample_once(
+		auto embeddings = model.gen_head_align(input_ids, num_imgs);
+		auto result = model.run_model(embeddings, num_imgs, 1);
+		auto [logits_cond, logits_uncond] = model.run_gen_head(result, num_imgs, 1);
+		input_ids = model.sample_once(
 			logits_cond, logits_uncond, num_imgs, temperature, cfg_weight);
 		generated_tokens.append_range(input_ids);
 		std::cout << std::setw(8) << input_ids[0] << std::endl;

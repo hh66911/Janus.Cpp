@@ -14,7 +14,7 @@ std::vector<cv::Mat> decode_images(
 
 std::vector<cv::Mat> generate(
 	std::vector<uint8_t> embeddings,
-	std::shared_ptr<LanguageModel> model,
+	LanguageModel& model,
 	float temperature = 1,
 	int num_imgs = 16,
 	int img_size = 384,

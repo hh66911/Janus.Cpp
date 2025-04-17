@@ -39,7 +39,7 @@ public:
 		node->value = value;
 	}
 
-	std::pair<int, int> searchLongest(const std::vector<uint8_t>& s, int start) const {
+	std::pair<int, int> searchLongest(const auto& s, int start) const {
 		TrieNode* node = root;
 		int max_len = 0;
 		int found_value = 0;
@@ -73,7 +73,7 @@ public:
 		}
 	}
 
-	std::vector<int> replace(const std::vector<uint8_t>& s) const {
+	std::vector<int> replace(const auto& s) const {
 		std::vector<int> result;
 		int i = 0;
 		while (i < s.size()) {

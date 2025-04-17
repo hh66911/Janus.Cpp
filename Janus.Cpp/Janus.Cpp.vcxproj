@@ -104,7 +104,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <OpenMPSupport>true</OpenMPSupport>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
@@ -112,7 +112,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\Debug;C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\ggml-cuda\Debug;C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\ggml-vulkan\Debug;C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\ggml-blas\Debug</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)\ggml\src\Debug;$(ProjectDir)\ggml\src\ggml-cuda\Debug;$(ProjectDir)\ggml\src\ggml-vulkan\Debug;$(ProjectDir)\ggml\src\ggml-blas\Debug</AdditionalLibraryDirectories>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
@@ -124,7 +124,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
-      <AdditionalIncludeDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)\ggml\include;C:\MyTools\vcpkg\installed\x64-windows\include\opencv4</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <OpenMPSupport>true</OpenMPSupport>
       <EnableEnhancedInstructionSet>AdvancedVectorExtensions</EnableEnhancedInstructionSet>
@@ -137,7 +137,7 @@
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\Release;C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\ggml-cuda\Release;C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\ggml-vulkan\Release;C:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\ggml\src\ggml-blas\Release</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>$(ProjectDir)\ggml\src\Release;$(ProjectDir)\ggml\src\ggml-cuda\Release;$(ProjectDir)\ggml\src\ggml-vulkan\Release;$(ProjectDir)\ggml\src\ggml-blas\Release</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

@@ -43,7 +43,7 @@ public:
 	constexpr static size_t head_dim = 128;
 	constexpr static size_t num_key_value_heads = 32;
 	const int layer_idx = -1;
-	constexpr static size_t max_cached_length = 1024;
+	constexpr static size_t max_cached_length = 2048;
 private:
 	std::vector<uint8_t> graph_buffer;
 	ggml_context* layer_ctx = nullptr;
@@ -55,8 +55,35 @@ public:
 		ggml_backend* container = nullptr
 	);
 
+	LlamaDecoderLayer(
+		const LlamaDecoderLayer& other) = delete;
+
+	LlamaDecoderLayer(LlamaDecoderLayer&& other)
+		: layer_idx(other.layer_idx)
+	{
+		layer_ctx = other.layer_ctx;
+		other.layer_ctx = nullptr;
+		backend = other.backend;
+		graph_buffer = std::move(other.graph_buffer);
+
+		q_proj = other.q_proj;
+		k_proj = other.k_proj;
+		v_proj = other.v_proj;
+		o_proj = other.o_proj;
+		gate_proj = other.gate_proj;
+		up_proj = other.up_proj;
+		down_proj = other.down_proj;
+		input_norm_weight = other.input_norm_weight;
+		norm_weight = other.norm_weight;
+
+		cached_length = other.cached_length;
+		cached_k = other.cached_k;
+		cached_v = other.cached_v;
+		worst_case_enabled = other.worst_case_enabled;
+	}
+
 	~LlamaDecoderLayer() {
-		ggml_free(layer_ctx);
+		if (layer_ctx) ggml_free(layer_ctx);
 	}
 
 	void ClearCache() {
@@ -68,12 +95,15 @@ public:
 	void FillTo(LlamaDecoderLayer& layer, bool async = false);
 	void SaveToFile(std::filesystem::path path);
 	void LoadFromFile(std::filesystem::path path);
-	inline static void QuantLayer(
-		int layer_idx,
-		std::filesystem::path dst
-	) {
-		LlamaDecoderLayer{ layer_idx }.SaveToFile(dst);
-	}
+	static void QuantLayer(
+		int layer_idx, ggml_backend* quant_end,
+		std::filesystem::path src_folder,
+		std::filesystem::path dst_folder
+	);
+	static LlamaDecoderLayer FromQuanted(
+		int layer_idx, ggml_backend* backend,
+		std::filesystem::path folder
+	);
 
 	ggml_cgraph* build_llama_layer(
 		size_t batch_size,
@@ -90,6 +120,7 @@ public:
 
 private:
 	// k v cache
+	bool worst_case_enabled = false;
 	int cached_length = 0;
 	std::shared_ptr<std::vector<uint8_t>> cached_k;
 	std::shared_ptr<std::vector<uint8_t>> cached_v;
@@ -122,16 +153,47 @@ private:
 	const int num_cpu_threads;
 public:
 	LanguageModel(
-		bool load_layers,
 		size_t gpu_offload_layer_num,
 		int num_cpu_threads = 1
 	);
-	~LanguageModel() {
-		ggml_free(model_ctx);
-		ggml_gallocr_free(cuda_ga);
-		ggml_backend_free(cuda_backend);
-		ggml_backend_free(cpu_backend);
+
+	LanguageModel(
+		LanguageModel&& other
+	) : gpu_offload_num(other.gpu_offload_num),
+		num_cpu_threads(other.num_cpu_threads),
+		gen_head(std::move(other.gen_head)),
+		layers(std::move(other.layers)),
+		offloads(std::move(other.offloads))
+	{
+		input_embeddings = other.input_embeddings;
+		output_rms_norm = other.output_rms_norm;
+
+		model_ctx = other.model_ctx;
+		cuda_backend = other.cuda_backend;
+		cuda_ga = other.cuda_ga;
+		cpu_backend = other.cpu_backend;
+
+		other.model_ctx = nullptr;
+		other.cuda_backend = nullptr;
+		other.cuda_ga = nullptr;
+		other.cpu_backend = nullptr;
 	}
+
+	~LanguageModel() {
+		if (model_ctx)
+		{
+			ggml_free(model_ctx);
+			ggml_gallocr_free(cuda_ga);
+			ggml_backend_free(cuda_backend);
+			ggml_backend_free(cpu_backend);
+		}
+	}
+
+	static LanguageModel LoadFromBin(
+		size_t gpu_offload_layer_num,
+		int num_cpu_threads,
+		std::filesystem::path src_folder
+	);
 
 	std::vector<uint8_t> preprocess(
 		std::vector<int> input_ids,
@@ -154,7 +216,7 @@ public:
 
 	std::pair<
 		std::vector<uint8_t>, std::vector<uint8_t>
-	> GenHead(
+	> run_gen_head(
 		std::vector<uint8_t> outputs,
 		size_t parallel_size,
 		size_t input_len

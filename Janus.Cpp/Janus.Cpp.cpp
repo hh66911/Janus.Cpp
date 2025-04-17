@@ -18,7 +18,7 @@
 #include "generate.h"
 
 std::string edit_text;
-int main(int argc, char** argv)
+int main1(int argc, char** argv)
 {
 	std::locale::global(std::locale("zh_CN.utf8"));
 
@@ -139,7 +139,7 @@ int main(int argc, char** argv)
 	constexpr size_t num_imgs = 1;
 	constexpr size_t img_sz = 384;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
-	auto language_model = std::make_shared<LanguageModel>(true, 30, num_threads);
+	auto language_model = LanguageModel::LoadFromBin(30, num_threads, R"(D:\Python\Janus\model-file)");
 	auto tokenizer = load_bpe_model(R"(.\Janus-Pro-7B)");
 	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
 	const std::vector<int> gen_prefix = { 100000, 5726, 25, 207 };
@@ -147,7 +147,7 @@ int main(int argc, char** argv)
 	input.push_back(100016);
 
 	auto time_start = std::chrono::high_resolution_clock::now();
-	auto embeddings = language_model->preprocess(input, num_imgs, num_patchs);
+	auto embeddings = language_model.preprocess(input, num_imgs, num_patchs);
 	std::vector<std::vector<int>> outtokens;
 	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5, outtokens);
 	auto time_end = std::chrono::high_resolution_clock::now();
@@ -166,5 +166,85 @@ int main(int argc, char** argv)
 
 	cv::imshow("output", imgs[0]);
 	cv::waitKey();
+	return 0;
+}
+
+int main4()
+{
+	ggml_backend* quant = ggml_backend_cpu_init();
+	for (auto i : std::views::iota(0, 30))
+	{
+		LlamaDecoderLayer::QuantLayer(
+			i, quant,
+			R"(D:\Python\Janus\model-file)",
+			R"(D:\Python\Janus\model-file\quanted_layers)"
+		);
+	}
+	return 0;
+}
+
+int main()
+{
+	std::locale::global(std::locale("zh_CN.utf8"));
+	SetProcessAffinityMask(GetCurrentProcess(), 0x0000ffff);
+
+	edit_text = "<｜begin▁of▁sentence｜><|User|>\n"
+		"an image of a man walk on a rainy street.\n\n<|Assistant|>\n<begin_of_image>";
+
+	constexpr size_t num_imgs = 1;
+	constexpr size_t img_sz = 384;
+	constexpr size_t num_patchs = img_sz * img_sz / 256;
+	auto language_model = LanguageModel::LoadFromBin(30, num_threads, R"(D:\Python\Janus\model-file)");
+	auto tokenizer = load_bpe_model(R"(D:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\Janus-Pro-7B)");
+	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
+	// const std::vector<int> gen_prefix = { 100000, 5726, 25, 207 };
+	std::cout << edit_text << std::endl << "Encoded: " << tokenizer_decode(tokenizer, input) << std::endl;
+	// input.insert_range(input.begin(), gen_prefix);
+	// input.push_back(100016);
+
+	auto time_start = std::chrono::high_resolution_clock::now();
+	auto embeddings = language_model.preprocess(input, num_imgs, num_patchs);
+	std::vector<std::vector<int>> outtokens;
+	auto imgs = generate(embeddings, language_model, .8, num_imgs, img_sz, 5, outtokens);
+	auto time_end = std::chrono::high_resolution_clock::now();
+	auto dur_sec = std::chrono::duration_cast<std::chrono::seconds>(time_end - time_start);
+	std::cout << "用时: " << dur_sec << std::endl;
+
+	for (auto [i, token_ids] : outtokens | std::views::enumerate) {
+		std::string decoded = tokenizer_decode(tokenizer, token_ids);
+		std::cout << "图片 " << i + 1 << "：" << decoded << std::endl;
+	}
+
+	auto output_folder = std::filesystem::current_path() / "generated-imgs";
+	for (auto [i, img] : imgs | std::views::enumerate) {
+		cv::imwrite((output_folder / ("out" + std::to_string(i) + ".png")).string(), img);
+	}
+
+	cv::imshow("output", imgs[0]);
+	cv::waitKey();
+
+	edit_text = "<end_of_image><｜end▁of▁sentence｜>\n\n<|User|>\n"
+		"well, then change the man to a woman.\n\n<|Assistant|>\n<begin_of_image>";
+	input = tokenizer_encode(tokenizer, edit_text);
+	time_start = std::chrono::high_resolution_clock::now();
+	embeddings = language_model.preprocess(input, num_imgs, num_patchs);
+	outtokens.clear();
+	imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5, outtokens);
+	time_end = std::chrono::high_resolution_clock::now();
+	dur_sec = std::chrono::duration_cast<std::chrono::seconds>(time_end - time_start);
+	std::cout << "用时: " << dur_sec << std::endl;
+
+	for (auto [i, token_ids] : outtokens | std::views::enumerate) {
+		std::string decoded = tokenizer_decode(tokenizer, token_ids);
+		std::cout << "图片 " << i + 1 << "：" << decoded << std::endl;
+	}
+
+	for (auto [i, img] : imgs | std::views::enumerate) {
+		cv::imwrite((output_folder / ("out" + std::to_string(i) + ".1.png")).string(), img);
+	}
+
+	cv::imshow("output", imgs[0]);
+	cv::waitKey();
+	
 	return 0;
 }

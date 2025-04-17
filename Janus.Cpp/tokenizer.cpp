@@ -72,30 +72,25 @@ std::vector<int> tokenizer_encode(const BPEModel& model, std::string raw_text)
 		special_id++;
 	}
 	std::sort(special_positions.begin(), special_positions.end());
-	std::vector<std::vector<uint8_t>> splitted_text;
 	size_t last_pos = 0;
+	std::vector<int> result;
+	auto text2token = [&model, &text](size_t pos, size_t len) {
+		auto text_span = std::span<uint8_t>(text.begin() + pos, len);
+		std::vector<uint8_t> mapped_text;
+		for (auto codelet : text_span | std::views::transform(
+			[&model](uint8_t byte) { return model.byte_map[byte]; }
+		)) mapped_text.append_range(codelet);
+		return model.vocab_replacer.replace(mapped_text);
+	};
 	for (const auto [pos, tid] : special_positions)
 	{
 		if (pos > last_pos)
-			splitted_text.emplace_back(text.begin() + last_pos, text.begin() + pos);
+			result.append_range(text2token(last_pos, pos - last_pos));
+		result.push_back(tid);
 		last_pos = pos + model.special_tokens[tid - BPEModel::special_start].size();
 	}
 	if (last_pos < text.size())
-		splitted_text.emplace_back(text.begin() + last_pos, text.end());
-
-	std::vector<int> result;
-	for (const auto [i, text] : splitted_text | std::views::enumerate)
-	{
-		if (i > 0)
-			result.push_back(special_positions[i - 1].second);
-		std::vector<uint8_t> mapped_text;
-		for (char c : text)
-		{
-			int byte = (unsigned char)c;
-			mapped_text.append_range(model.byte_map[byte]);
-		}
-		result.append_range(model.vocab_replacer.replace(mapped_text));
-	}
+		result.append_range(text2token(last_pos, text.size() - last_pos));
 
 	return result;
 }
@@ -111,7 +106,7 @@ std::string tokenizer_decode(const BPEModel& model, const std::vector<int>& toke
 		{
 			splitted_text.push_back(current_text);
 			current_text.clear();
-			specials.push_back(token);
+			specials.push_back(token - BPEModel::special_start);
 		}
 		else
 			current_text.append_range(model.vocab[token]);
@@ -140,7 +135,7 @@ std::string tokenizer_decode(const BPEModel& model, const std::vector<int>& toke
 	{
 		result.append_range(splitted_text[i]);
 		if (i < specials.size())
-			result.append_range(model.vocab[specials[i]]);
+			result.append_range(model.special_tokens[specials[i]]);
 	}
 
 	std::string result_text;
