@@ -169,7 +169,7 @@ int main1(int argc, char** argv)
 	return 0;
 }
 
-int main4()
+int main3()
 {
 	ggml_backend* quant = ggml_backend_cpu_init();
 	for (auto i : std::views::iota(0, 30))
@@ -180,6 +180,51 @@ int main4()
 			R"(D:\Python\Janus\model-file\quanted_layers)"
 		);
 	}
+	return 0;
+}
+
+int main4()
+{
+	auto backend = ggml_backend_cpu_init();
+	auto layer = LlamaDecoderLayer::FromQuanted(0, backend, R"(D:\Python\Janus\model-file\quanted_layers)");
+
+	bool save = true;
+
+	std::vector<uint8_t> data(4096ull * 4 * 1 * 4);
+	std::ifstream fin("inspect\\data.bin", std::ios::binary);
+	fin.read(reinterpret_cast<char*>(data.data()), data.size());
+	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+
+	MidTensors::GetInstance().SetPathPrefix("prefill_");
+	layer.run_layer(data, ga, 1, 4, save);
+
+	data.resize(4096ull * 4 * 1);
+	fin.open("inspect\\data1.bin", std::ios::binary);
+	fin.read(reinterpret_cast<char*>(data.data()), data.size());
+	MidTensors::GetInstance().SetPathPrefix("cached_");
+	layer.run_layer(data, ga, 1, 1, save);
+
+	return 0;
+}
+
+int main2()
+{
+	auto backend = ggml_backend_cpu_init();
+	auto layer = LlamaDecoderLayer::FromQuanted(0, backend, R"(D:\Python\Janus\model-file\quanted_layers)");
+
+	bool save = false;
+
+	std::vector<uint8_t> data(4096ull * 4 * 1 * 4);
+	std::ifstream fin("inspect\\data.bin", std::ios::binary);
+	fin.read(reinterpret_cast<char*>(data.data()), data.size());
+	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+
+	MidTensors::GetInstance().SetPathPrefix("pf1_");
+	layer.run_layer(data, ga, 1, 4, save);
+
+	MidTensors::GetInstance().SetPathPrefix("re2_");
+	layer.refill_batch(data, ga, 0);
+
 	return 0;
 }
 
@@ -205,7 +250,7 @@ int main()
 	auto time_start = std::chrono::high_resolution_clock::now();
 	auto embeddings = language_model.preprocess(input, num_imgs, num_patchs);
 	std::vector<std::vector<int>> outtokens;
-	auto imgs = generate(embeddings, language_model, .8, num_imgs, img_sz, 5, outtokens);
+	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5, outtokens);
 	auto time_end = std::chrono::high_resolution_clock::now();
 	auto dur_sec = std::chrono::duration_cast<std::chrono::seconds>(time_end - time_start);
 	std::cout << "用时: " << dur_sec << std::endl;
@@ -222,6 +267,9 @@ int main()
 
 	cv::imshow("output", imgs[0]);
 	cv::waitKey();
+
+	language_model.refill_batch(language_model.get_pad_embs(
+		language_model.get_cached_length(), true, false), 1);
 
 	edit_text = "<end_of_image><｜end▁of▁sentence｜>\n\n<|User|>\n"
 		"well, then change the man to a woman.\n\n<|Assistant|>\n<begin_of_image>";

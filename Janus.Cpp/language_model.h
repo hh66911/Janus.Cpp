@@ -44,6 +44,7 @@ public:
 	constexpr static size_t num_key_value_heads = 32;
 	const int layer_idx = -1;
 	constexpr static size_t max_cached_length = 2048;
+	constexpr static size_t cache_incre = 32;
 private:
 	std::vector<uint8_t> graph_buffer;
 	ggml_context* layer_ctx = nullptr;
@@ -107,7 +108,9 @@ public:
 
 	ggml_cgraph* build_llama_layer(
 		size_t batch_size,
-		size_t input_len
+		size_t input_len,
+		bool use_cache,
+		bool fast_attn
 	);
 
 	std::vector<uint8_t> run_layer(
@@ -115,13 +118,22 @@ public:
 		ggml_gallocr* layer_galloc,
 		size_t batch_size,
 		size_t input_len,
-		bool save_details = false
+		bool save_details = false,
+		bool use_cache = true
+	);
+
+	ggml_cgraph* build_refill_graph(size_t input_len, bool fast_attn);
+
+	std::vector<uint8_t> refill_batch(
+		const std::vector<uint8_t>& input_embs_data,
+		ggml_gallocr* layer_galloc, size_t batch_idx
 	);
 
 private:
 	// k v cache
 	bool worst_case_enabled = false;
 	int cached_length = 0;
+	size_t cache_capacity = 0;
 	std::shared_ptr<std::vector<uint8_t>> cached_k;
 	std::shared_ptr<std::vector<uint8_t>> cached_v;
 
@@ -201,6 +213,9 @@ public:
 		size_t image_token_num_per_image
 	);
 
+	std::vector<uint8_t> get_pad_embs(size_t input_len,
+		bool with_sentence_start, bool with_img_start);
+
 	std::vector<uint8_t> postprocess(
 		std::vector<uint8_t> hidden_states_data,
 		size_t parallel_size,
@@ -213,6 +228,10 @@ public:
 		size_t input_len,
 		bool dump_data = false
 	);
+
+	void refill_batch(std::vector<uint8_t> input_embs_data, size_t batch_idx);
+
+	inline const size_t get_cached_length() const { return processed_length; }
 
 	std::pair<
 		std::vector<uint8_t>, std::vector<uint8_t>
@@ -232,6 +251,7 @@ public:
 		size_t parallel_size
 	);
 private:
+	size_t processed_length = 0;
 	ggml_tensor* input_embeddings = nullptr;
 	ggml_tensor* output_rms_norm = nullptr;
 	std::vector<std::unique_ptr<LlamaDecoderLayer>> layers;
