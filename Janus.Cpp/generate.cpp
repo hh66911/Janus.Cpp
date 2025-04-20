@@ -3,12 +3,6 @@
 #include <ggml-cpu.h>
 #include <ggml-cuda.h>
 
-#pragma comment(lib, "ggml.lib")
-#pragma comment(lib, "ggml-base.lib")
-#pragma comment(lib, "ggml-cpu.lib")
-#pragma comment(lib, "ggml-blas.lib")
-#pragma comment(lib, "ggml-cuda.lib")
-
 #include <span>
 #include <numeric>
 #include <algorithm>

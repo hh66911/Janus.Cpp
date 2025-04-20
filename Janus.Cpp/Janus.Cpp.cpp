@@ -6,7 +6,6 @@
 #include <filesystem>
 #include <fstream>
 #include <opencv2/opencv.hpp>
-#include <Windows.h>
 #include <thread>
 #include <locale>
 
@@ -239,7 +238,7 @@ int main()
 	constexpr size_t num_imgs = 1;
 	constexpr size_t img_sz = 384;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
-	auto language_model = LanguageModel::LoadFromBin(30, num_threads, R"(D:\Python\Janus\model-file)");
+	auto language_model = LanguageModel::LoadFromBin(15, num_threads, R"(D:\Python\Janus\model-file)");
 	auto tokenizer = load_bpe_model(R"(D:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\Janus-Pro-7B)");
 	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
 	// const std::vector<int> gen_prefix = { 100000, 5726, 25, 207 };

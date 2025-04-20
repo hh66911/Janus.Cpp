@@ -33,6 +33,16 @@ void F32TensorFromFile(ggml_context* ctx, ggml_tensor* dst, std::filesystem::pat
 		static_cast<float*>(dst->data)[i] = ggml_fp16_to_fp32(buffer[i]);
 }
 
+void RawF32TensorFromFile(ggml_context* ctx, ggml_tensor* dst, std::filesystem::path path)
+{
+	if (dst->type != GGML_TYPE_F32)
+		throw std::runtime_error("Wrong tensor type");
+	std::ifstream file(path, std::ios::binary);
+	if (!file.is_open())
+		throw std::runtime_error("Failed to open file: " + path.string());
+	file.read(reinterpret_cast<char*>(dst->data), ggml_nbytes(dst));
+}
+
 std::vector<uint8_t> F32DataFromFile(std::filesystem::path path)
 {
 	std::ifstream file(path, std::ios::binary);
@@ -47,6 +57,17 @@ std::vector<uint8_t> F32DataFromFile(std::filesystem::path path)
 	for (int i = 0; i < buffer.size(); ++i)
 		reinterpret_cast<float*>(float_buffer.data())[i] = ggml_fp16_to_fp32(buffer[i]);
 	return float_buffer;
+}
+
+std::vector<uint8_t> RawF32DataFromFile(std::filesystem::path path)
+{
+	std::ifstream file(path, std::ios::binary);
+	if (!file.is_open())
+		throw std::runtime_error("Failed to open file: " + path.string());
+	auto file_size = std::filesystem::file_size(path);
+	std::vector<uint8_t> buffer(file_size);
+	file.read(reinterpret_cast<char*>(buffer.data()), buffer.size() * sizeof(float));
+	return buffer;
 }
 
 void F16TensorFromFile(ggml_context* ctx, ggml_tensor* dst, std::filesystem::path path)
@@ -69,7 +90,7 @@ std::vector<uint8_t> F16DataFromFile(std::filesystem::path path)
 
 void ConvertModelFile(std::filesystem::path src, std::filesystem::path dst)
 {
-	auto type = GGML_TYPE_Q8_0;
+	auto type = GGML_TYPE_Q8_1;
 	constexpr size_t num_tensors = 9;
 	constexpr size_t num_elements =
 		4096ull * 4096 * 4 + 4096ull * 11008 * 3 +

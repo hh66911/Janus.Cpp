@@ -299,7 +299,7 @@ public:
 
 	ggml_tensor* operator()(ggml_context* ctx, ggml_tensor* input) {
 		auto width = input->ne[0], height = input->ne[1];
-		auto x = ggml_upscale(ctx, input, 2);
+		auto x = ggml_upscale(ctx, input, 2, GGML_SCALE_MODE_NEAREST);
 		return conv(ctx, x);
 	}
 private:

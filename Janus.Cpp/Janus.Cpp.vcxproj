@@ -112,8 +112,8 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>$(ProjectDir)\ggml\src\Debug;$(ProjectDir)\ggml\src\ggml-cuda\Debug;$(ProjectDir)\ggml\src\ggml-vulkan\Debug;$(ProjectDir)\ggml\src\ggml-blas\Debug</AdditionalLibraryDirectories>
-      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)\ggml\build\src\Debug;$(ProjectDir)\ggml\build\src\ggml-cuda\Debug;$(ProjectDir)\ggml\build\src\ggml-rpc\Debug</AdditionalLibraryDirectories>
+      <AdditionalDependencies>ggml.lib;ggml-base.lib;ggml-cpu.lib;ggml-cuda.lib;ggml-rpc.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -136,8 +136,8 @@
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)\ggml\src\Release;$(ProjectDir)\ggml\src\ggml-cuda\Release;$(ProjectDir)\ggml\src\ggml-vulkan\Release;$(ProjectDir)\ggml\src\ggml-blas\Release</AdditionalLibraryDirectories>
+      <AdditionalDependencies>ggml.lib;ggml-base.lib;ggml-cpu.lib;ggml-cuda.lib;ggml-rpc.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)\ggml\build\src\Release;$(ProjectDir)\ggml\build\src\ggml-cuda\Release;$(ProjectDir)\ggml\build\src\ggml-rpc\Release</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

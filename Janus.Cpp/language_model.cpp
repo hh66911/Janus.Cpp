@@ -3,10 +3,79 @@
 #include "quant.h"
 #include "timer.h"
 
+RemoteLayer::RemoteLayer(std::string endpoint)
+	: client(endpoint)
+{}
+
+void RemoteLayer::LoadRange(std::pair<size_t, size_t> start_end)
+{
+	httplib::Params params;
+	params.emplace("start", std::to_string(start_end.first));
+	params.emplace("end", std::to_string(start_end.second));
+	auto res = client.Get("/load_range", params, {});
+	if (res && res->status == 200)
+		std::cout << "Load range: " << start_end.first << " - " << start_end.second << std::endl;
+	else
+		throw std::runtime_error("Failed to load range");
+}
+
+std::vector<uint8_t> RemoteLayer::Run(
+	const std::vector<uint8_t>& embeddings, size_t batch_size, size_t input_len)
+{
+	auto res = client.Get("/set_params", httplib::Params{
+		{"batch_size", std::to_string(batch_size)},
+		{"input_len", std::to_string(input_len)}
+		}, {});
+	if (res && res->status != 200)
+		throw std::runtime_error("Failed to set params");
+
+	res = client.Post(
+		"/run", embeddings.size(),
+		[&embeddings, batch_size, input_len](size_t offset, size_t length, httplib::DataSink& sink) {
+			const char* data = reinterpret_cast<const char*>(embeddings.data());
+			sink.write(data + offset, length);
+			return true; // return 'false' if you want to cancel the request.
+		}, "application/octet-stream");
+	if (res && res->status == 200)
+	{
+		std::vector<uint8_t> result(res->body.size());
+		std::copy(res->body.begin(), res->body.end(), result.begin());
+		return result;
+	}
+	else
+		throw std::runtime_error("Failed to run layer");
+}
+
+std::vector<uint8_t> RemoteLayer::RefillBatch(
+	const std::vector<uint8_t>& embeddings, size_t batch_idx)
+{
+	auto res = client.Get("/set_params", httplib::Params{
+		{"batch_idx", std::to_string(batch_idx)}
+		}, {});
+	if (res && res->status != 200)
+		throw std::runtime_error("Failed to set batch index");
+
+	res = client.Post(
+		"/refill_batch", embeddings.size(),
+		[&embeddings, batch_idx](size_t offset, size_t length, httplib::DataSink& sink) {
+			const char* data = reinterpret_cast<const char*>(embeddings.data());
+			sink.write(data + offset, length);
+			return true; // return 'false' if you want to cancel the request.
+		}, "application/octet-stream");
+	if (res && res->status == 200)
+	{
+		std::vector<uint8_t> result(res->body.size());
+		std::copy(res->body.begin(), res->body.end(), result.begin());
+		return result;
+	}
+	else
+		throw std::runtime_error("Failed to refill batch");
+}
+
 LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 	: backend(container), layer_idx(layer_index)
 {
-	ggml_type type = GGML_TYPE_Q6_K;
+	ggml_type type = GGML_TYPE_Q8_0;
 	constexpr size_t num_tensors = 9;
 	if (backend)
 	{
@@ -129,7 +198,8 @@ void LlamaDecoderLayer::QuantLayer(
 	LlamaDecoderLayer layer{ -1, quant_end };
 
 	auto base_name = "layers." + std::to_string(layer_idx) + ".";
-	QuantTensorFromFile(layer.layer_ctx, layer.input_norm_weight, src / (base_name + "input_layernorm.weight.bin"));
+	RawF32TensorFromFile(layer.layer_ctx, layer.input_norm_weight, src / (base_name + "input_layernorm.weight.bin"));
+	RawF32TensorFromFile(layer.layer_ctx, layer.norm_weight, src / (base_name + "post_attention_layernorm.weight.bin"));
 	QuantTensorFromFile(layer.layer_ctx, layer.q_proj, src / (base_name + "self_attn.q_proj.weight.bin"));
 	QuantTensorFromFile(layer.layer_ctx, layer.k_proj, src / (base_name + "self_attn.k_proj.weight.bin"));
 	QuantTensorFromFile(layer.layer_ctx, layer.v_proj, src / (base_name + "self_attn.v_proj.weight.bin"));
@@ -137,7 +207,6 @@ void LlamaDecoderLayer::QuantLayer(
 	QuantTensorFromFile(layer.layer_ctx, layer.gate_proj, src / (base_name + "mlp.gate_proj.weight.bin"));
 	QuantTensorFromFile(layer.layer_ctx, layer.up_proj, src / (base_name + "mlp.up_proj.weight.bin"));
 	QuantTensorFromFile(layer.layer_ctx, layer.down_proj, src / (base_name + "mlp.down_proj.weight.bin"));
-	QuantTensorFromFile(layer.layer_ctx, layer.norm_weight, src / (base_name + "post_attention_layernorm.weight.bin"));
 
 	layer.SaveToFile(dst / (base_name + "quant.bin"));
 }
@@ -616,19 +685,190 @@ std::vector<uint8_t> LlamaDecoderLayer::refill_batch(
 	return result;
 }
 
+LayerServer::LayerServer(std::string endpoint, std::filesystem::path model_file)
+	: server(), batch_idx(0), batch_size(0), input_len(0), model_file(model_file)
+{
+	auto host = endpoint.substr(0, endpoint.find(':'));
+	auto port = endpoint.substr(endpoint.find(':') + 1);
+	server.bind_to_port(host, std::stoi(port));
+	server.Get("/load_range",
+		[this](const httplib::Request& req, httplib::Response& res) {
+			auto start = req.get_param_value("start");
+			auto end = req.get_param_value("end");
+			if (start.empty() || end.empty())
+			{
+				res.status = 400;
+				return;
+			}
+			std::pair<size_t, size_t> range;
+			auto iss = std::istringstream(start);
+			iss >> range.first;
+			iss = std::istringstream(end);
+			iss >> range.second;
+			LoadRange(range);
+		});
+
+	server.Get("/set_params",
+		[this](const httplib::Request& req, httplib::Response& res) {
+			auto batch_size = req.get_param_value("batch_size");
+			auto input_len = req.get_param_value("input_len");
+			auto batch_idx = req.get_param_value("batch_idx");
+
+			if (batch_idx.empty())
+			{
+				if (batch_size.empty() || input_len.empty())
+				{
+					res.status = 400;
+					return;
+				}
+				auto iss = std::istringstream(batch_size);
+				iss >> this->batch_size;
+				iss = std::istringstream(input_len);
+				iss >> this->input_len;
+				std::cout << "Set params: batch_size = " << batch_size
+					<< ", input_len = " << input_len << std::endl;
+			}
+			else
+			{
+				if (batch_size.empty() && input_len.empty())
+				{
+					auto iss = std::istringstream(batch_idx);
+					iss >> this->batch_idx;
+					std::cout << "Set batch index: " << batch_idx << std::endl;
+				}
+				else
+				{
+					res.status = 400;
+					return;
+				}
+			}
+		});
+
+	server.Post("/run",
+		[this](
+			const httplib::Request& req,
+			httplib::Response& res,
+			const httplib::ContentReader& reader
+		) -> void {
+			std::vector<uint8_t> embs;
+			reader([&](const char* data, size_t data_length) {
+				auto offset = embs.size();
+				embs.resize(offset + data_length);
+				std::copy(data, data + data_length, embs.data() + offset);
+				return true;
+			});
+			if (embs.empty())
+			{
+				res.status = 400;
+				return;
+			}
+			try
+			{
+				embs = Run(embs);
+			}
+			catch (std::runtime_error e)
+			{
+				std::cerr << e.what();
+				res.status = 400;
+				return;
+			}
+			res.set_content(
+				reinterpret_cast<char*>(embs.data()),
+				embs.size(), "application/octet-stream");
+		});
+
+	server.Post("/refill_batch",
+		[this](
+			const httplib::Request & req,
+			httplib::Response & res,
+			const httplib::ContentReader & reader
+		) -> void {
+			std::vector<uint8_t> embs;
+			reader([&](const char* data, size_t data_length) {
+				auto offset = embs.size();
+				embs.resize(offset + data_length);
+				std::copy(data, data + data_length, embs.data() + offset);
+				return true;
+			});
+			if (embs.empty())
+			{
+				res.status = 400;
+				return;
+			}
+			try
+			{
+				embs = RefillBatch(embs);
+			}
+			catch (std::runtime_error e)
+			{
+				std::cerr << e.what();
+				res.status = 400;
+				return;
+			}
+			res.set_content(
+				reinterpret_cast<char*>(embs.data()),
+				embs.size(), "application/octet-stream");
+		});
+}
+
+void LayerServer::StartServer()
+{
+	server.listen_after_bind();
+}
+
+void LayerServer::StopServer()
+{
+}
+
+void LayerServer::LoadRange(std::pair<size_t, size_t> range)
+{
+	if (backend)
+	{
+		ggml_backend_free(backend);
+		ggml_gallocr_free(ga);
+	}
+	backend = ggml_backend_cuda_init(0);
+	ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
+	auto cpu_backend = ggml_backend_cpu_init();
+	layers.clear();
+	layers.reserve(range.second - range.first);
+	auto folder = model_file / "quanted_layers";
+	for (auto i : std::views::iota(range.first, range.second))
+	{
+		auto layer = LlamaDecoderLayer::FromQuanted(i, cpu_backend, folder);
+		layers.emplace_back(-1, backend);
+		layer.FillTo(layers.back());
+	}
+}
+
+std::vector<uint8_t> LayerServer::Run(std::vector<uint8_t> emb)
+{
+	for (auto& layer : layers)
+		emb = layer.run_layer(emb, ga, batch_size, input_len);
+	return emb;
+}
+
+std::vector<uint8_t> LayerServer::RefillBatch(std::vector<uint8_t> embs)
+{
+	for (auto& layer : layers)
+		embs = layer.refill_batch(embs, ga, batch_idx);
+	return embs;
+}
+
 LanguageModel::LanguageModel(
-	size_t gpu_offload_layer_num, int num_cpu_threads
+	size_t remote_num, int num_cpu_threads
 )
 	: cuda_backend(ggml_backend_cuda_init(0)),
 	  cpu_backend(ggml_backend_cpu_init()),
 	  gen_head(cpu_backend),
-	  gpu_offload_num(gpu_offload_layer_num),
+	  remote_num(remote_num),
+	  remote_range{ (30 - remote_num + 1) / 2, (30 + remote_num + 1) / 2 },
 	  num_cpu_threads(num_cpu_threads)
 {
 	ggml_backend_cpu_set_n_threads(cpu_backend, num_cpu_threads);
 	ggml_init_params model_params = {
 		.mem_size = ggml_tensor_overhead() * 2 +
-			4096ull * 102400 * ggml_type_size(GGML_TYPE_F16) +
+			4096ull * 102400 * ggml_type_size(GGML_TYPE_F32) +
 			4096ull * ggml_type_size(GGML_TYPE_F32),
 		.mem_buffer = nullptr,
 		.no_alloc = false
@@ -639,26 +879,28 @@ LanguageModel::LanguageModel(
 
 	// 从文件加载
 	input_embeddings = ggml_new_tensor_2d(
-		model_ctx, GGML_TYPE_F16, 4096u, 102400u);
+		model_ctx, GGML_TYPE_F32, 4096u, 102400u);
 	output_rms_norm = ggml_new_tensor_1d(model_ctx, GGML_TYPE_F32, 4096ull);
 }
 
 LanguageModel LanguageModel::LoadFromBin(
-	size_t gpu_offload_layer_num,
+	size_t remote_num,
 	int num_cpu_threads,
 	std::filesystem::path src_folder
 )
 {
-	LanguageModel model{ gpu_offload_layer_num, num_cpu_threads };
-	F16TensorFromFile(model.model_ctx, model.input_embeddings,
+	LanguageModel model{ remote_num, num_cpu_threads };
+	RawF32TensorFromFile(model.model_ctx, model.input_embeddings,
 		R"(D:\Python\Janus\model-file\embed_tokens.bin)");
-	F32TensorFromFile(model.model_ctx, model.output_rms_norm,
+	RawF32TensorFromFile(model.model_ctx, model.output_rms_norm,
 		R"(D:\Python\Janus\model-file\norm.weight.bin)");
 
 	model.layers.resize(30);
 #pragma omp parallel for
 	for (int i = 0; i < 30; i++)
 	{
+		if (i >= model.remote_range.first && i < model.remote_range.second)
+			continue;
 		model.layers[i] = std::make_unique<LlamaDecoderLayer>(
 			LlamaDecoderLayer::FromQuanted(i, model.cpu_backend, src_folder / "quanted_layers")
 		);
@@ -666,12 +908,22 @@ LanguageModel LanguageModel::LoadFromBin(
 			_ASSERT(false);
 	}
 
-	model.offloads.reserve(gpu_offload_layer_num);
-	for (auto i : std::views::iota(0ull, gpu_offload_layer_num))
+	model.offloads.reserve(30 - remote_num);
+
+	for (auto i : std::views::iota(0ull, model.remote_range.first))
 	{
 		model.offloads.emplace_back(-1, model.cuda_backend);
 		model.layers[i]->FillTo(model.offloads[i]);
 	}
+
+	for (auto i : std::views::iota(model.remote_range.second, 30ull))
+	{
+		model.offloads.emplace_back(-1, model.cuda_backend);
+		model.layers[i]->FillTo(model.offloads[i - remote_num]);
+	}
+
+	model.remote_layer = RemoteLayer("49.68.229.162:9800");
+	model.remote_layer->LoadRange(model.remote_range);
 
 	return model;
 }
@@ -785,16 +1037,28 @@ std::vector<uint8_t> LanguageModel::run_model(
 	if (input_embs_data.size() != parallel_size * 2 * input_len * 4096ull * 4)
 		throw std::runtime_error("Input embeddings size mismatch");
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Model);
-	for (auto i : std::views::iota(0ull, gpu_offload_num))
+
+	for (auto i : std::views::iota(0ull, remote_range.first))
 	{
 		// 运行模型
-		auto& layer = offloads[i];
-		input_embs_data = layer.run_layer(
+		input_embs_data = offloads[i].run_layer(
 			input_embs_data, cuda_ga, parallel_size * 2, input_len);
 		if (dump_data)
 			MidTensors::GetInstance().dump_data_retry(
 				input_embs_data, "inspect/model/layer_" + std::to_string(i) + ".bin");
 	}
+	if (remote_layer)
+		input_embs_data = remote_layer->Run(input_embs_data, parallel_size * 2, input_len);
+	for (auto i : std::views::iota(remote_range.second, 30ull))
+	{
+		// 运行模型
+		input_embs_data = offloads[i - remote_num].run_layer(
+			input_embs_data, cuda_ga, parallel_size * 2, input_len);
+		if (dump_data)
+			MidTensors::GetInstance().dump_data_retry(
+				input_embs_data, "inspect/model/layer_" + std::to_string(i) + ".bin");
+	}
+
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::Model);
 	// ModelTimer::GetInstance().PrintTimeConsumedAll();
 	auto mem_size = ggml_gallocr_get_buffer_size(cuda_ga, 0);
@@ -814,10 +1078,18 @@ void LanguageModel::refill_batch(
 	std::vector<uint8_t> input_embs_data, size_t batch_idx)
 {
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::Model);
-	for (auto i : std::views::iota(0ull, gpu_offload_num))
+	for (auto i : std::views::iota(0ull, remote_range.first))
 	{
 		// 运行模型
 		auto& layer = offloads[i];
+		input_embs_data = layer.refill_batch(input_embs_data, cuda_ga, batch_idx);
+	}
+	if (remote_layer)
+		input_embs_data = remote_layer->RefillBatch(input_embs_data, batch_idx);
+	for (auto i : std::views::iota(remote_range.second, 30ull))
+	{
+		// 运行模型
+		auto& layer = offloads[i - remote_num];
 		input_embs_data = layer.refill_batch(input_embs_data, cuda_ga, batch_idx);
 	}
 	ModelTimer::GetInstance().Stop(ModelTimer::TimerType::Model);
@@ -938,7 +1210,7 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 	mlp_p2 = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 4096ull, 4096ull);
 	mlp_p1_bias = ggml_new_tensor_1d(gen_head_ctx, GGML_TYPE_F32, 4096ull);
 	mlp_p2_bias = ggml_new_tensor_1d(gen_head_ctx, GGML_TYPE_F32, 4096ull);
-	align_embeddings = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F16, 8ull, 16384ull);
+	align_embeddings = ggml_new_tensor_2d(gen_head_ctx, GGML_TYPE_F32, 8ull, 16384ull);
 	ggml_backend_alloc_ctx_tensors(gen_head_ctx, container);
 	auto buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\output_mlp_projector.bin)");
 	ggml_backend_tensor_set(output_mlp_projector, buffer.data(), 0, buffer.size());
@@ -952,7 +1224,7 @@ LanguageModel::GenHead::GenHead(ggml_backend* container)
 	ggml_backend_tensor_set(mlp_p1_bias, buffer.data(), 0, buffer.size());
 	buffer = F32DataFromFile(R"(D:\Python\Janus\model-file\mlp_p2_bias.bin)");
 	ggml_backend_tensor_set(mlp_p2_bias, buffer.data(), 0, buffer.size());
-	buffer = F16DataFromFile(R"(D:\Python\Janus\model-file\align_embeddings.bin)");
+	buffer = RawF32DataFromFile(R"(D:\Python\Janus\model-file\align_embeddings.bin)");
 	ggml_backend_tensor_set(align_embeddings, buffer.data(), 0, buffer.size());
 }
 

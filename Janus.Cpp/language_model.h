@@ -9,8 +9,24 @@
 #include <functional>
 #include <filesystem>
 #include <random>
+#include <httplib.h>
 
 #include "tensor_utils.h"
+
+class RemoteLayer
+{
+public:
+	RemoteLayer(std::string endpoint);
+
+	void LoadRange(std::pair<size_t, size_t>);
+	std::vector<uint8_t> Run(
+		const std::vector<uint8_t>&, size_t batch_size, size_t input_len);
+	std::vector<uint8_t> RefillBatch(
+		const std::vector<uint8_t>&, size_t batch_idx);
+
+private:
+	httplib::Client client;
+};
 
 /*
 LlamaModel(
@@ -153,6 +169,29 @@ private:
 	ggml_tensor* norm_weight = nullptr;
 };
 
+class LayerServer
+{
+public:
+	LayerServer(std::string endpoint, std::filesystem::path model_file);
+	void StartServer();
+	void StopServer();
+
+	void LoadRange(std::pair<size_t, size_t>);
+	std::vector<uint8_t> Run(std::vector<uint8_t>);
+	std::vector<uint8_t> RefillBatch(std::vector<uint8_t>);
+
+private:
+	httplib::Server server;
+	std::pair<size_t, size_t> load_range;
+	size_t batch_size, input_len, batch_idx;
+
+	std::vector<LlamaDecoderLayer> layers;
+	ggml_backend* backend = nullptr;
+	ggml_gallocr* ga = nullptr;
+
+	std::filesystem::path model_file;
+};
+
 class LanguageModel
 {
 private:
@@ -161,17 +200,19 @@ private:
 	ggml_backend* cuda_backend = nullptr;
 	ggml_backend* cpu_backend = nullptr;
 	ggml_gallocr* cuda_ga = nullptr;
-	const size_t gpu_offload_num;
+	const size_t remote_num;
+	const std::pair<size_t, size_t> remote_range;
 	const int num_cpu_threads;
 public:
 	LanguageModel(
-		size_t gpu_offload_layer_num,
+		size_t remote_num,
 		int num_cpu_threads = 1
 	);
 
 	LanguageModel(
 		LanguageModel&& other
-	) : gpu_offload_num(other.gpu_offload_num),
+	) : remote_num(other.remote_num),
+		remote_range(other.remote_range),
 		num_cpu_threads(other.num_cpu_threads),
 		gen_head(std::move(other.gen_head)),
 		layers(std::move(other.layers)),
@@ -202,7 +243,7 @@ public:
 	}
 
 	static LanguageModel LoadFromBin(
-		size_t gpu_offload_layer_num,
+		size_t remote_num,
 		int num_cpu_threads,
 		std::filesystem::path src_folder
 	);
@@ -256,6 +297,7 @@ private:
 	ggml_tensor* output_rms_norm = nullptr;
 	std::vector<std::unique_ptr<LlamaDecoderLayer>> layers;
 	std::vector<LlamaDecoderLayer> offloads;
+	std::optional<RemoteLayer> remote_layer;
 	struct GenHead
 	{
 		ggml_context* gen_head_ctx = nullptr;
