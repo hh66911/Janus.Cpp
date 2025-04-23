@@ -18,6 +18,10 @@ vl_gpt: MultiModalityCausalLM = AutoModelForCausalLM.from_pretrained(
 )
 vl_gpt = vl_gpt.to(torch.float16).eval()
 
+##################################################
+output_dir = r'' # YOU NEED TO CHANGE THIS VARIABLE
+##################################################
+
 def save_res_block(module, name):
     module.conv1.weight.data.numpy().view(
         np.uint8).tofile(f"{name}.conv_in.weight.bin")
@@ -104,22 +108,22 @@ def save_decoder(module, name):
     module.norm_out.bias.data.numpy().view(
         np.uint8).tofile(f"{name}.norm_out.bias.bin")
     
-save_decoder(vl_gpt.gen_vision_model.decoder, 'model-file/vq/decoder')
+save_decoder(vl_gpt.gen_vision_model.decoder, f"{output_dir}/vq/decoder")
 
 vq_embs = vl_gpt.gen_vision_model.quantize.embedding.weight.data.numpy()
 vq_embs = vq_embs / np.linalg.norm(vq_embs, axis=1, keepdims=True)
-vq_embs.view(np.uint8).tofile("model-file/vq/quantize.embedding.bin")
+vq_embs.view(np.uint8).tofile(f"{output_dir}/vq/quantize.embedding.bin")
 
 vl_gpt.gen_vision_model.quant_conv.weight.data.numpy().view(
-np.uint8).tofile("model-file/vq/quant_conv.weight.bin")
+np.uint8).tofile(f"{output_dir}/vq/quant_conv.weight.bin")
 vl_gpt.gen_vision_model.quant_conv.bias.data.numpy().view(
-    np.uint8).tofile("model-file/vq/quant_conv.bias.bin")
+    np.uint8).tofile(f"{output_dir}/vq/quant_conv.bias.bin")
 vl_gpt.gen_vision_model.post_quant_conv.weight.data.numpy().view(
-    np.uint8).tofile("model-file/vq/post_quant_conv.weight.bin")
+    np.uint8).tofile(f"{output_dir}/vq/post_quant_conv.weight.bin")
 vl_gpt.gen_vision_model.post_quant_conv.bias.data.numpy().view(
-    np.uint8).tofile("model-file/vq/post_quant_conv.bias.bin")
+    np.uint8).tofile(f"{output_dir}/vq/post_quant_conv.bias.bin")
 
 vl_gpt.gen_aligner.layers[0].bias.half().detach().cpu().numpy().view(np.uint8).tofile(
-    "model-file/mlp_p1_bias.bin")
+    f"{output_dir}/mlp_p1_bias.bin")
 vl_gpt.gen_aligner.layers[2].bias.half().detach().cpu().numpy().view(np.uint8).tofile(
-    "model-file/mlp_p2_bias.bin")
+    f"{output_dir}/mlp_p2_bias.bin")

@@ -18,7 +18,9 @@ vl_gpt: MultiModalityCausalLM = AutoModelForCausalLM.from_pretrained(
     model_path, trust_remote_code=True
 ).eval()
 
-output_dir = 'model-file'
+##################################################
+output_dir = r'' # YOU NEED TO CHANGE THIS VARIABLE
+##################################################
 
 vl_gpt.language_model.model.norm.weight.data.numpy().view(
     dtype=np.uint8).tofile(f"{output_dir}/norm.weight.bin")
