@@ -62,6 +62,7 @@ public:
 	constexpr static size_t max_cached_length = 2048;
 	constexpr static size_t cache_incre = 32;
 private:
+	std::vector<uint8_t> ctx_buffer;
 	std::vector<uint8_t> graph_buffer;
 	ggml_context* layer_ctx = nullptr;
 	ggml_backend* backend;
@@ -100,7 +101,10 @@ public:
 	}
 
 	~LlamaDecoderLayer() {
-		if (layer_ctx) ggml_free(layer_ctx);
+		if (layer_ctx)
+		{
+			ggml_free(layer_ctx);
+		}
 	}
 
 	void ClearCache() {

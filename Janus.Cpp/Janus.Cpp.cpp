@@ -229,6 +229,13 @@ int main2()
 
 int main()
 {
+	auto cpu_backend = ggml_backend_cpu_init();
+	for (int i = 0; i < 10; i++)
+		LlamaDecoderLayer::FromQuanted(i, cpu_backend, R"(D:\Python\Janus\model-file\quanted_layers)");
+}
+
+int main0()
+{
 	std::locale::global(std::locale("zh_CN.utf8"));
 	SetProcessAffinityMask(GetCurrentProcess(), 0x0000ffff);
 
@@ -236,9 +243,9 @@ int main()
 		"an image of a man walk on a rainy street.\n\n<|Assistant|>\n<begin_of_image>";
 
 	constexpr size_t num_imgs = 1;
-	constexpr size_t img_sz = 384;
+	constexpr size_t img_sz = 512;
 	constexpr size_t num_patchs = img_sz * img_sz / 256;
-	auto language_model = LanguageModel::LoadFromBin(15, num_threads, R"(D:\Python\Janus\model-file)");
+	auto language_model = LanguageModel::LoadFromBin(14, num_threads, R"(D:\Python\Janus\model-file)");
 	auto tokenizer = load_bpe_model(R"(D:\CodeRepo\VisualStudioSource\Janus.Cpp\Janus.Cpp\Janus-Pro-7B)");
 	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
 	// const std::vector<int> gen_prefix = { 100000, 5726, 25, 207 };
@@ -266,6 +273,7 @@ int main()
 
 	cv::imshow("output", imgs[0]);
 	cv::waitKey();
+	return 0;
 
 	language_model.refill_batch(language_model.get_pad_embs(
 		language_model.get_cached_length(), true, false), 1);

@@ -90,11 +90,15 @@ LlamaDecoderLayer::LlamaDecoderLayer(int layer_index, ggml_backend* container)
 	{
 		constexpr size_t num_elements =
 			4096ull * 4096 * 4 + 4096ull * 11008 * 3;
+		// ~400 MB when type = BF16
+		auto mem_size = num_elements * ggml_type_size(type) / ggml_blck_size(type)
+			+ 4096 * ggml_type_size(GGML_TYPE_F32) * 2
+			+ num_tensors * ggml_tensor_overhead();
+		ctx_buffer.resize(mem_size);
 		ggml_init_params layer_param = {
-			// ~400 MB when type = BF16
-			.mem_size = num_elements * ggml_type_size(type) / ggml_blck_size(type)
-					  + 4096 * ggml_type_size(GGML_TYPE_F32) * 2
-					  + num_tensors * ggml_tensor_overhead(),
+			.mem_size = mem_size,
+			.mem_buffer = ctx_buffer.data(),
+			.no_alloc = true
 		};
 		layer_ctx = ggml_init(layer_param);
 	}
@@ -822,15 +826,15 @@ void LayerServer::StopServer()
 
 void LayerServer::LoadRange(std::pair<size_t, size_t> range)
 {
+	layers.clear();
 	if (backend)
 	{
-		ggml_backend_free(backend);
 		ggml_gallocr_free(ga);
+		ggml_backend_free(backend);
 	}
 	backend = ggml_backend_cuda_init(0);
 	ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
 	auto cpu_backend = ggml_backend_cpu_init();
-	layers.clear();
 	layers.reserve(range.second - range.first);
 	auto folder = model_file / "quanted_layers";
 	for (auto i : std::views::iota(range.first, range.second))
@@ -839,6 +843,7 @@ void LayerServer::LoadRange(std::pair<size_t, size_t> range)
 		layers.emplace_back(-1, backend);
 		layer.FillTo(layers.back());
 	}
+	ggml_backend_free(cpu_backend);
 }
 
 std::vector<uint8_t> LayerServer::Run(std::vector<uint8_t> emb)
