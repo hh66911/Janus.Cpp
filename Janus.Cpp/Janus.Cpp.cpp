@@ -206,7 +206,7 @@ int main4()
 	return 0;
 }
 
-int main2()
+int main()
 {
 	auto backend = ggml_backend_cpu_init();
 	auto layer = LlamaDecoderLayer::FromQuanted(0, backend, R"(D:\Python\Janus\model-file\quanted_layers)");
@@ -227,7 +227,7 @@ int main2()
 	return 0;
 }
 
-int main()
+int main5()
 {
 	auto cpu_backend = ggml_backend_cpu_init();
 	for (int i = 0; i < 10; i++)

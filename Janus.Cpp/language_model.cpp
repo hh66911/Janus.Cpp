@@ -340,7 +340,10 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(
 		ggml_tensor* residual = nullptr;
 		if (fast_attn)
 		{
-			// ggml_flash_attn_ext()
+			constexpr auto kq_mask_pad = GGML_PAD(1, GGML_KQ_MASK_PAD);
+			auto mask_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, input_len, kq_mask_pad);
+			ggml_set_input(mask_tensor);
+			ggml_flash_attn_ext(ctx, q, k, v, mask_tensor, 1.f / float(sqrt(head_dim)), 0, 0);
 		}
 		else
 		{
