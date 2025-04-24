@@ -17,7 +17,49 @@
 #include "generate.h"
 
 std::string edit_text;
-int main1(int argc, char** argv)
+
+void do_generate()
+{
+	SetProcessAffinityMask(GetCurrentProcess(), 0xFFFF);
+
+	constexpr size_t num_imgs = 1;
+	constexpr size_t img_sz = 384;
+	constexpr size_t num_patchs = img_sz * img_sz / 256;
+	auto language_model = LanguageModel::LoadFromBin(0, num_threads, R"(D:\Python\Janus\model-file)");
+	auto tokenizer = load_bpe_model(R"(.\Janus-Pro-7B)");
+	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
+
+	auto time_start = std::chrono::high_resolution_clock::now();
+	auto embeddings = language_model.preprocess(input, num_imgs, num_patchs);
+	std::vector<std::vector<int>> outtokens;
+	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5, outtokens);
+	auto time_end = std::chrono::high_resolution_clock::now();
+	auto dur_sec = std::chrono::duration_cast<std::chrono::seconds>(time_end - time_start);
+	std::cout << "用时: " << dur_sec << std::endl;
+
+	for (auto [i, token_ids] : outtokens | std::views::enumerate) {
+		std::string decoded = tokenizer_decode(tokenizer, token_ids);
+		std::cout << "图片 " << i + 1 << "：" << decoded << std::endl;
+	}
+
+	auto output_folder = std::filesystem::current_path() / "generated-imgs";
+	for (auto [i, img] : imgs | std::views::enumerate) {
+		cv::imwrite((output_folder / ("out" + std::to_string(i) + ".png")).string(), img);
+	}
+
+	cv::imshow("output", imgs[0]);
+	cv::waitKey();
+}
+
+int main()
+{
+	edit_text = "<｜begin▁of▁sentence｜><|User|>\n"
+		"an image of a man walk on a rainy street.\n\n<|Assistant|>\n<begin_of_image>";
+	do_generate();
+	return 0;
+}
+
+int main6(int argc, char** argv)
 {
 	std::locale::global(std::locale("zh_CN.utf8"));
 
@@ -132,39 +174,6 @@ int main1(int argc, char** argv)
 	}
 
 	std::cout << "文本: " << edit_text << std::endl;
-
-	SetProcessAffinityMask(GetCurrentProcess(), 0xFFFF);
-
-	constexpr size_t num_imgs = 1;
-	constexpr size_t img_sz = 384;
-	constexpr size_t num_patchs = img_sz * img_sz / 256;
-	auto language_model = LanguageModel::LoadFromBin(30, num_threads, R"(D:\Python\Janus\model-file)");
-	auto tokenizer = load_bpe_model(R"(.\Janus-Pro-7B)");
-	std::vector<int> input = tokenizer_encode(tokenizer, edit_text);
-	const std::vector<int> gen_prefix = { 100000, 5726, 25, 207 };
-	input.insert_range(input.begin(), gen_prefix);
-	input.push_back(100016);
-
-	auto time_start = std::chrono::high_resolution_clock::now();
-	auto embeddings = language_model.preprocess(input, num_imgs, num_patchs);
-	std::vector<std::vector<int>> outtokens;
-	auto imgs = generate(embeddings, language_model, 1, num_imgs, img_sz, 5, outtokens);
-	auto time_end = std::chrono::high_resolution_clock::now();
-	auto dur_sec = std::chrono::duration_cast<std::chrono::seconds>(time_end - time_start);
-	std::cout << "用时: " << dur_sec << std::endl;
-
-	for (auto [i, token_ids] : outtokens | std::views::enumerate) {
-		std::string decoded = tokenizer_decode(tokenizer, token_ids);
-		std::cout << "图片 " << i + 1 << "：" << decoded << std::endl;
-	}
-
-	auto output_folder = std::filesystem::current_path() / "generated-imgs";
-	for (auto [i, img] : imgs | std::views::enumerate) {
-		cv::imwrite((output_folder / ("out" + std::to_string(i) + ".png")).string(), img);
-	}
-
-	cv::imshow("output", imgs[0]);
-	cv::waitKey();
 	return 0;
 }
 
@@ -182,7 +191,7 @@ int main3()
 	return 0;
 }
 
-int main4()
+int main2()
 {
 	auto backend = ggml_backend_cpu_init();
 	auto layer = LlamaDecoderLayer::FromQuanted(0, backend, R"(D:\Python\Janus\model-file\quanted_layers)");
@@ -206,10 +215,15 @@ int main4()
 	return 0;
 }
 
-int main()
+int main1()
 {
-	auto backend = ggml_backend_cpu_init();
-	auto layer = LlamaDecoderLayer::FromQuanted(0, backend, R"(D:\Python\Janus\model-file\quanted_layers)");
+	auto offload = ggml_backend_cpu_init();
+	ggml_backend_cpu_set_n_threads(offload, 1);
+	auto layer_cpu = LlamaDecoderLayer::FromQuanted(0, offload, R"(D:\Python\Janus\model-file\quanted_layers)");
+	// auto backend = offload;
+	auto backend = ggml_backend_cuda_init(0);
+	auto layer = LlamaDecoderLayer(-1, backend);
+	layer_cpu.FillTo(layer);
 
 	bool save = false;
 
@@ -218,11 +232,10 @@ int main()
 	fin.read(reinterpret_cast<char*>(data.data()), data.size());
 	auto ga = ggml_gallocr_new(ggml_backend_get_default_buffer_type(backend));
 
-	MidTensors::GetInstance().SetPathPrefix("pf1_");
-	layer.run_layer(data, ga, 1, 4, save);
-
-	MidTensors::GetInstance().SetPathPrefix("re2_");
-	layer.refill_batch(data, ga, 0);
+	for (auto k = 0; k < 10; k++)
+	{
+		layer.run_layer(data, ga, 1, 4, save);
+	}
 
 	return 0;
 }
@@ -232,6 +245,7 @@ int main5()
 	auto cpu_backend = ggml_backend_cpu_init();
 	for (int i = 0; i < 10; i++)
 		LlamaDecoderLayer::FromQuanted(i, cpu_backend, R"(D:\Python\Janus\model-file\quanted_layers)");
+	return 0;
 }
 
 int main0()

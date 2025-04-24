@@ -326,24 +326,75 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_cat");
 		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat");
 
-		// [batch, num_head, seq_len, head_dim]
-		q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 3, 1));
-		k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 3, 1));
-
-		// [batch, num_head, head_dim, seq_len]
-		v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 3, 0));
-
-		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_cat_perm");
-		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat_perm");
-		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_cur");
-
-		ggml_tensor* residual = nullptr;
-		if (fast_attn)
+		ggml_tensor* attn_output = nullptr;
+		if (fast_attn && cached_length > 0)
 		{
-			constexpr auto kq_mask_pad = GGML_PAD(1, GGML_KQ_MASK_PAD);
-			auto mask_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, input_len, kq_mask_pad);
-			ggml_set_input(mask_tensor);
-			ggml_flash_attn_ext(ctx, q, k, v, mask_tensor, 1.f / float(sqrt(head_dim)), 0, 0);
+			const size_t padded_cachelen = GGML_PAD(k->ne[3], 256u);
+			k = view_tensor(ctx, ggml_pad(ctx,
+				view_tensor(ctx, k, head_dim * num_heads * batch_size, k->ne[3]),
+				0, int(padded_cachelen - k->ne[3]), 0, 0),
+				head_dim, num_heads, batch_size, padded_cachelen);
+			v = view_tensor(ctx, ggml_pad(ctx,
+				view_tensor(ctx, v, head_dim * num_heads * batch_size, v->ne[3]),
+				0, int(padded_cachelen - v->ne[3]), 0, 0),
+				head_dim, num_heads, batch_size, padded_cachelen);
+			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_cat_pad");
+			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat_pad");
+
+			k = ggml_cast(ctx, k, GGML_TYPE_F16);
+			v = ggml_cast(ctx, v, GGML_TYPE_F16);
+
+			const size_t padded_inplen = GGML_PAD(input_len, GGML_KQ_MASK_PAD);
+
+			// [batch_size, num_heads, input_len, head_dim]
+			v = ggml_cont(ctx, ggml_permute(ctx, v, 0, 2, 3, 1));
+			k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 3, 1));
+			q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 3, 1));
+
+			auto mask_tensor = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, padded_cachelen, padded_inplen);
+			ggml_set_input(ggml_set_name(mask_tensor, "mask_input"));
+			std::vector<ggml_tensor*> attn_batched;
+			for (auto i : std::views::iota(0ull, batch_size))
+			{
+				auto qi = ggml_view_4d(ctx, q, head_dim, input_len, num_heads, 1,
+					q->nb[1], q->nb[2], q->nb[3], q->nb[3] * i);
+				auto ki = ggml_view_4d(ctx, k, head_dim, padded_cachelen, num_heads, 1,
+					k->nb[1], k->nb[2], k->nb[3], k->nb[3] * i);
+				auto vi = ggml_view_4d(ctx, v, head_dim, padded_cachelen, num_heads, 1,
+					v->nb[1], v->nb[2], v->nb[3], v->nb[3] * i);
+				MidTensors::GetInstance().inspect_tensor(
+					ctx, layer_graph, qi, "q[" + std::to_string(i) + "]");
+				MidTensors::GetInstance().inspect_tensor(
+					ctx, layer_graph, ki, "k[" + std::to_string(i) + "]");
+				MidTensors::GetInstance().inspect_tensor(
+					ctx, layer_graph, vi, "v[" + std::to_string(i) + "]");
+				auto output_i = ggml_flash_attn_ext(ctx,
+					qi, ki, vi, mask_tensor, 1.f / float(sqrt(head_dim)), 0, 0);
+				MidTensors::GetInstance().inspect_tensor(
+					ctx, layer_graph, output_i, "attn_output[" + std::to_string(i) + "]");
+				attn_batched.push_back(output_i);
+			}
+			// 连接所有的 residual
+			if (attn_batched.size() > 1)
+			{
+				typedef std::span<ggml_tensor*> tensors;
+				auto merge_all = [ctx](tensors cont) -> ggml_tensor* {
+					auto merge = [ctx](this auto& self, tensors l, tensors r) -> ggml_tensor* {
+						if (l.size() == 1) return ggml_concat(ctx, l[0], r[0], 3);
+						auto mid = l.size() / 2;
+						auto lmerge = self(l.subspan(0, mid), r.subspan(0, mid));
+						auto rmerge = self(l.subspan(mid), r.subspan(mid));
+						return ggml_concat(ctx, lmerge, rmerge, 3);
+					};
+					assert(cont.size() % 2 == 0);
+					auto mid = cont.size() / 2;
+					return merge(cont.subspan(0, mid), cont.subspan(mid));
+				};
+				attn_output = merge_all(attn_batched);
+			}
+			else
+				attn_output = attn_batched[0];
+			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, attn_output, "res_merged");
 		}
 		else
 		{
@@ -351,6 +402,18 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(
 			// 返回的张量形状为 [ne3, ne2, b->ne[1], a->ne[1]]
 			// 特此记录，以免忘记
 			// Shape: [batch, num_head * head_dim, seq_len, seq_len]
+
+			// [batch, num_head, seq_len, head_dim]
+			q = ggml_cont(ctx, ggml_permute(ctx, q, 0, 2, 3, 1));
+			k = ggml_cont(ctx, ggml_permute(ctx, k, 0, 2, 3, 1));
+
+			// [batch, num_head, head_dim, seq_len]
+			v = ggml_cont(ctx, ggml_permute(ctx, v, 1, 2, 3, 0));
+
+			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, k, "k_cat_perm");
+			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, v, "v_cat_perm");
+			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, q, "q_cur");
+
 			ggml_tensor* QK = ggml_mul_mat(ctx, k, q); // QK = Q * K^T
 			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, QK, "QK");
 			// QK_scaled = QK / sqrt(dim)
@@ -363,16 +426,17 @@ ggml_cgraph* LlamaDecoderLayer::build_llama_layer(
 			// QK = soft_max(QK_masked)
 			ggml_tensor* QK_soft_max = ggml_soft_max_inplace(ctx, QK_masked);
 			// attn_output = QK * V^T | Shape: [batch, num_head, seq_len, head_dim]
-			auto attn_output = ggml_mul_mat(ctx, v, QK_soft_max);
-			attn_output = ggml_permute(ctx, attn_output, 0, 2, 1, 3);
-			// Shape: [batch, seq_len, num_head * head_dim]
-			attn_output = view_tensor(ctx, ggml_cont(ctx, attn_output),
-				head_dim * num_heads, input_len, batch_size);
-			attn_output = ggml_mul_mat(ctx, o_proj, attn_output);
-			MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, attn_output, "o_proj");
-			residual = ggml_add_inplace(ctx, flatten_tensor(ctx, attn_output), flatten_tensor(ctx, input_emb));
-			residual = view_tensor(ctx, residual, 4096u, input_len, batch_size);
+			attn_output = ggml_mul_mat(ctx, v, QK_soft_max);
 		}
+
+		attn_output = ggml_permute(ctx, attn_output, 0, 2, 1, 3);
+		// Shape: [batch, seq_len, num_head * head_dim]
+		attn_output = view_tensor(ctx, ggml_cont(ctx, attn_output),
+			head_dim * num_heads, input_len, batch_size);
+		attn_output = ggml_mul_mat(ctx, o_proj, attn_output);
+		MidTensors::GetInstance().inspect_tensor(ctx, layer_graph, attn_output, "o_proj");
+		auto residual = ggml_add_inplace(ctx, flatten_tensor(ctx, attn_output), flatten_tensor(ctx, input_emb));
+		residual = view_tensor(ctx, residual, head_dim * num_heads, input_len, batch_size);
 
 		// 层归一化
 		auto mlp_input = ggml_rms_norm(ctx, residual, eps);
@@ -410,7 +474,7 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 
 	if (save_details) MidTensors::GetInstance().StartRegisterMidTensors();
 	ModelTimer::GetInstance().Start(ModelTimer::TimerType::BuildGraph);
-	auto gr = build_llama_layer(batch_size, input_len, use_cache, false);
+	auto gr = build_llama_layer(batch_size, input_len, use_cache, use_flash_attn);
 	ggml_gallocr_reserve(layer_galloc, gr);
 	if (!ggml_gallocr_alloc_graph(layer_galloc, gr))
 		throw std::runtime_error("Cannot allocate graph in LlamaDecoderLayer");
@@ -422,8 +486,8 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 
 	auto input_embs_tensor = ggml_graph_get_tensor(gr, "input_emb");
 	ggml_backend_tensor_set(input_embs_tensor, input_embs_data.data(), 0, input_embs_data.size());
-	auto pos_ids = ggml_graph_get_tensor(gr, "pos_ids");
 
+	auto pos_ids = ggml_graph_get_tensor(gr, "pos_ids");
 	auto pos_ids_generator = std::views::iota(
 		cached_length, cached_length + int(input_len));
 	std::vector<int> pos_ids_data(input_len);
@@ -432,6 +496,24 @@ std::vector<uint8_t> LlamaDecoderLayer::run_layer(
 
 	if (cached_length > 0)
 	{
+		if (use_flash_attn)
+		{
+			auto mask_tensor = ggml_graph_get_tensor(gr, "mask_input");
+			size_t padded_k = mask_tensor->ne[0];
+			size_t padded_len = mask_tensor->ne[1];
+			std::vector<ggml_fp16_t> mask_data(padded_len * padded_k);
+			const ggml_fp16_t neg_inf = ggml_fp32_to_fp16(-1e10);
+			const ggml_fp16_t zero16 = ggml_fp32_to_fp16(0);
+			for (auto i : std::views::iota(0ull, input_len))
+			{
+				auto mask = mask_data.begin() + i * padded_k;
+				std::fill(mask, mask + cached_length + i + 1, zero16);
+				std::fill(mask + cached_length + i + 1, mask + padded_k, neg_inf);
+			}
+			std::fill(mask_data.begin() + padded_k * input_len, mask_data.end(), neg_inf);
+			ggml_backend_tensor_set(mask_tensor, mask_data.data(), 0, ggml_nbytes(mask_tensor));
+		}
+
 		auto past_k = ggml_graph_get_tensor(gr, "past_k");
 		auto past_v = ggml_graph_get_tensor(gr, "past_v");
 		ggml_backend_tensor_set(past_k, cached_k->data(), 0, ggml_nbytes(past_k));
@@ -842,7 +924,7 @@ void LayerServer::LoadRange(std::pair<size_t, size_t> range)
 	auto folder = model_file / "quanted_layers";
 	for (auto i : std::views::iota(range.first, range.second))
 	{
-		auto layer = LlamaDecoderLayer::FromQuanted(i, cpu_backend, folder);
+		auto layer = LlamaDecoderLayer::FromQuanted((int)i, cpu_backend, folder);
 		layers.emplace_back(-1, backend);
 		layer.FillTo(layers.back());
 	}
@@ -930,8 +1012,11 @@ LanguageModel LanguageModel::LoadFromBin(
 		model.layers[i]->FillTo(model.offloads[i - remote_num]);
 	}
 
-	model.remote_layer = RemoteLayer("49.68.229.162:9800");
-	model.remote_layer->LoadRange(model.remote_range);
+	if (remote_num > 0)
+	{
+		model.remote_layer = RemoteLayer("49.68.229.162:9800");
+		model.remote_layer->LoadRange(model.remote_range);
+	}
 
 	return model;
 }

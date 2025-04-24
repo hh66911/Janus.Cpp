@@ -59,8 +59,9 @@ public:
 	constexpr static size_t head_dim = 128;
 	constexpr static size_t num_key_value_heads = 32;
 	const int layer_idx = -1;
-	constexpr static size_t max_cached_length = 2048;
+	constexpr static size_t max_cached_length = 1024;
 	constexpr static size_t cache_incre = 32;
+	constexpr static bool use_flash_attn = true;
 private:
 	std::vector<uint8_t> ctx_buffer;
 	std::vector<uint8_t> graph_buffer;

@@ -40,7 +40,7 @@ inline ggml_tensor* view_tensor(ggml_context* ctx, ggml_tensor* tensor, DimTypes
 	constexpr size_t num_dims = sizeof...(DimTypes);
 	static_assert(num_dims <= GGML_MAX_DIMS);
 	auto type = tensor->type;
-	std::array<size_t, num_dims> ne = { dims... };
+	std::array<size_t, num_dims> ne = { static_cast<size_t>(dims)... };
 	if constexpr (num_dims == 1)
 		return ggml_view_1d(ctx, tensor, ne[0], 0);
 	else if constexpr (num_dims == 2)
