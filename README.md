@@ -3,7 +3,9 @@
 
 Janus.Cpp 目前专注于 [Janus-Pro-7B](https://huggingface.co/deepseek-ai/Janus-Pro-7B) 模型在低显存和量化后的文生图推理。
 
-性能相对于 transformer 库使用 bf16 进行推理速度快 80%
+性能相对于 transformer 库使用 bf16 进行推理速度快 80%，使用 flash_attnetion 可以再提速 100%
+
+实测：RTX 4060 Laptop 8GB 使用 Q8_0 量化的模型可以实现 112s 生成一张图（384x384）。
 
 Janus.Cpp 现在支持基于 tcp/ip 的分布式推理，在显存不够的情况下可以通过两个节点组网凑够（ip 需能公网 ping 通）。
 
@@ -24,8 +26,8 @@ Janus.Cpp 无法直接读取 .safetensors 文件，使用 `convert_vq.py` 和 `c
 Janus.CPP 可以从上一步的 .bin 文件生成量化的模型权重，
 
 # TODO
-- [ ] 多节点分布推理
-- [ ] Flash Attention
+- [x] Flash Attention
 - [ ] 使用 GGUF
 - [ ] 命令行 Argument Parser
+- [ ] 多节点分布推理
 - [ ] 支持更多回归生图、视频模型（MAGI-1, FramePack, ...）
